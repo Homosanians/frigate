@@ -1,9 +1,13 @@
 import { usePtzCommand } from "@/api/ws";
 import { Button } from "@/components/ui/button";
+import PtzPresetsDialog, {
+  PtzPresetCreateDialog,
+} from "@/components/overlay/dialog/PtzPresetsDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -12,8 +16,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import useKeyboardListener from "@/hooks/use-keyboard-listener";
-import { CameraPtzInfo } from "@/types/ptz";
-import React, { useCallback } from "react";
+import { useIsAdmin } from "@/hooks/use-is-admin";
+import { usePtzPresetActions } from "@/hooks/use-ptz-presets";
+import { CameraPtzInfo, PtzPreset } from "@/types/ptz";
+import React, { useCallback, useMemo, useState } from "react";
 import { isMobile } from "react-device-detect";
 import { BsThreeDotsVertical } from "react-icons/bs";
 import {
@@ -26,6 +32,7 @@ import { TbViewfinder } from "react-icons/tb";
 import {
   MdCenterFocusStrong,
   MdCenterFocusWeak,
+  MdHome,
   MdZoomIn,
   MdZoomOut,
 } from "react-icons/md";
@@ -54,6 +61,24 @@ export default function PtzControlPanel({
   );
 
   const { send: sendPtz } = usePtzCommand(camera);
+
+  const isAdmin = useIsAdmin();
+  const { setHome } = usePtzPresetActions(camera);
+  const [createPresetOpen, setCreatePresetOpen] = useState(false);
+  const [managePresetsOpen, setManagePresetsOpen] = useState(false);
+
+  // preset_details keeps the camera's original casing; older backends only
+  // report the lowercase names
+  const presets = useMemo<PtzPreset[]>(
+    () =>
+      ptz?.preset_details ??
+      (ptz?.presets ?? []).map((name) => ({ token: name, name })),
+    [ptz],
+  );
+  const canManagePresets =
+    isAdmin &&
+    !!ptz?.preset_details &&
+    (ptz.features.includes("pt") || ptz.features.includes("zoom"));
 
   const onStop = useCallback(
     (e: React.SyntheticEvent) => {
@@ -87,6 +112,12 @@ export default function PtzControlPanel({
       }
 
       if (["1", "2", "3", "4", "5", "6", "7", "8", "9"].includes(key)) {
+        // keyup also reaches this listener, including from text inputs such
+        // as the preset name field, so only recall presets on keydown
+        if (!modifiers.down) {
+          return true;
+        }
+
         const presetNumber = parseInt(key);
         if (
           ptz &&
@@ -269,6 +300,15 @@ export default function PtzControlPanel({
         </>
       )}
 
+      {ptz?.features?.includes("home") && (
+        <TooltipButton
+          label={t("ptz.home.goto")}
+          onClick={() => sendPtz("HOME")}
+        >
+          <MdHome />
+        </TooltipButton>
+      )}
+
       {ptz?.features?.includes("pt-r-fov") && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -291,7 +331,7 @@ export default function PtzControlPanel({
           </TooltipContent>
         </Tooltip>
       )}
-      {(ptz?.presets?.length ?? 0) > 0 && (
+      {(presets.length > 0 || canManagePresets) && (
         <DropdownMenu>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -310,18 +350,60 @@ export default function PtzControlPanel({
             className="scrollbar-container max-h-[40dvh] overflow-y-auto"
             onCloseAutoFocus={(e) => e.preventDefault()}
           >
-            {ptz?.presets.map((preset) => (
+            {presets.map((preset) => (
               <DropdownMenuItem
-                key={preset}
-                aria-label={preset}
+                key={preset.token}
+                aria-label={preset.name}
                 className="cursor-pointer"
-                onSelect={() => sendPtz(`preset_${preset}`)}
+                onSelect={() => sendPtz(`preset_${preset.name}`)}
               >
-                {preset}
+                {preset.name}
               </DropdownMenuItem>
             ))}
+            {canManagePresets && (
+              <>
+                {presets.length > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onSelect={() => setCreatePresetOpen(true)}
+                >
+                  {t("ptz.presetManagement.create.label")}
+                </DropdownMenuItem>
+                {ptz?.features?.includes("home-set") && (
+                  <DropdownMenuItem
+                    className="cursor-pointer"
+                    onSelect={() => setHome()}
+                  >
+                    {t("ptz.home.set")}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onSelect={() => setManagePresetsOpen(true)}
+                >
+                  {t("ptz.presetManagement.manage")}
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
+      )}
+      {canManagePresets && (
+        <>
+          <PtzPresetCreateDialog
+            camera={camera}
+            open={createPresetOpen}
+            setOpen={setCreatePresetOpen}
+          />
+          <PtzPresetsDialog
+            camera={camera}
+            open={managePresetsOpen}
+            setOpen={setManagePresetsOpen}
+            presets={presets}
+            maxPresets={ptz?.max_presets}
+            onGoto={(preset) => sendPtz(`preset_${preset.name}`)}
+          />
+        </>
       )}
     </div>
   );

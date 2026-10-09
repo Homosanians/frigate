@@ -38,6 +38,15 @@ class OnvifCommandEnum(str, Enum):
     zoom_out = "zoom_out"
     focus_in = "focus_in"
     focus_out = "focus_out"
+    home = "home"
+
+
+class OnvifUnavailableError(Exception):
+    """ONVIF is not configured or could not be initialized for a camera."""
+
+
+class OnvifRequestError(ValueError):
+    """A PTZ management request was rejected before reaching the camera."""
 
 
 PAN_TILT_VELOCITY = {
@@ -178,6 +187,8 @@ class OnvifController:
                 "active": False,
                 "features": [],
                 "presets": {},
+                "preset_details": [],
+                "max_presets": None,
                 "profiles": [],
             }
             return True
@@ -433,24 +444,37 @@ class OnvifController:
 
         # setup existing presets
         try:
-            presets: list[dict] = await ptz.GetPresets({"ProfileToken": profile.token})
+            await self._load_presets(camera_name)
         except Exception as e:
             logger.warning(f"Unable to get presets from camera: {camera_name}: {e}")
-            presets = []
-
-        for preset in presets:
-            preset_name = getattr(preset, "Name") or f"preset {preset['token']}"
-            # Some cameras (e.g. Reolink) return UTF-8 bytes that zeep decodes
-            # as latin-1, producing mojibake. Detect that and repair it by
-            # round-tripping through latin-1 -> utf-8.
-            try:
-                preset_name = preset_name.encode("latin-1").decode("utf-8")
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                pass
-            cam["presets"][preset_name.lower()] = preset["token"]
 
         # get list of supported features
         supported_features = []
+
+        # home position support and preset limits are only reported on the PTZ node
+        node = None
+        try:
+            nodes = await ptz.GetNodes()
+        except Exception as e:
+            logger.debug(f"Unable to get PTZ nodes for {camera_name}: {e}")
+            nodes = []
+
+        if nodes:
+            node_token = getattr(configs, "NodeToken", None)
+            node = next(
+                (n for n in nodes if getattr(n, "token", None) == node_token),
+                nodes[0],
+            )
+
+        if node is not None:
+            cam["max_presets"] = getattr(node, "MaximumNumberOfPresets", None)
+
+            if getattr(node, "HomeSupported", False):
+                supported_features.append("home")
+
+                # a fixed home position can be recalled but not overwritten
+                if not getattr(node, "FixedHomePosition", False):
+                    supported_features.append("home-set")
 
         if configs.DefaultContinuousPanTiltVelocitySpace:
             supported_features.append("pt")
@@ -664,6 +688,134 @@ class OnvifController:
 
         cam["active"] = False
 
+    async def _goto_home(self, camera_name: str) -> None:
+        cam = self.cams[camera_name]
+        metrics = self.ptz_metrics.get(camera_name)
+
+        if metrics is None:
+            return
+
+        # not gated on the "home" feature: HomeSupported is misreported by some
+        # firmware, and a camera without home support will just fault
+        cam["active"] = True
+        metrics.start_time.value = 0
+        metrics.stop_time.value = 0
+
+        await cam["ptz"].GotoHomePosition(
+            {"ProfileToken": cam["move_request"].ProfileToken}
+        )
+
+        cam["active"] = False
+
+    async def _load_presets(self, camera_name: str) -> None:
+        """Refresh the cached presets from the camera."""
+        cam = self.cams[camera_name]
+        presets = await cam["ptz"].GetPresets(
+            {"ProfileToken": cam["move_request"].ProfileToken}
+        )
+
+        preset_tokens: dict[str, str] = {}
+        preset_details: list[dict[str, str]] = []
+
+        for preset in presets or []:
+            token = preset["token"]
+            preset_name = getattr(preset, "Name") or f"preset {token}"
+            # Some cameras (e.g. Reolink) return UTF-8 bytes that zeep decodes
+            # as latin-1, producing mojibake. Detect that and repair it by
+            # round-tripping through latin-1 -> utf-8.
+            try:
+                preset_name = preset_name.encode("latin-1").decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+            preset_tokens[preset_name.lower()] = token
+            preset_details.append({"token": token, "name": preset_name})
+
+        cam["presets"] = preset_tokens
+        cam["preset_details"] = preset_details
+
+    async def _get_initialized_cam(self, camera_name: str) -> dict:
+        if camera_name not in self.cams:
+            raise OnvifUnavailableError(f"ONVIF is not configured for {camera_name}")
+
+        if not self.cams[camera_name]["init"] and not await self._init_onvif(
+            camera_name
+        ):
+            raise OnvifUnavailableError(f"ONVIF failed to initialize for {camera_name}")
+
+        return self.cams[camera_name]
+
+    async def set_preset(
+        self, camera_name: str, name: str | None, token: str | None = None
+    ) -> str:
+        """Save the current camera position as a preset.
+
+        ONVIF has no rename operation: SetPreset always stores the current
+        position, so passing an existing token overwrites that preset.
+
+        Args:
+            camera_name: The camera to save the preset on
+            name: The preset name, or None to keep the existing name on overwrite
+            token: The token of an existing preset to overwrite
+
+        Returns:
+            The token of the saved preset
+        """
+        cam = await self._get_initialized_cam(camera_name)
+        details = {p["token"]: p["name"] for p in cam["preset_details"]}
+
+        if token is not None and token not in details:
+            raise OnvifRequestError(f"Preset {token} not found for {camera_name}")
+
+        if name is None and token is not None:
+            name = details[token]
+
+        name = (name or "").strip()
+
+        if not name:
+            raise OnvifRequestError("Preset name must not be empty")
+
+        # presets are recalled by lowercase name, so a duplicate would be ambiguous
+        existing = cam["presets"].get(name.lower())
+        if existing is not None and existing != token:
+            raise OnvifRequestError(f"A preset named {name} already exists")
+
+        request = {
+            "ProfileToken": cam["move_request"].ProfileToken,
+            "PresetName": name,
+        }
+
+        if token is not None:
+            request["PresetToken"] = token
+
+        result = await cam["ptz"].SetPreset(request)
+        await self._load_presets(camera_name)
+        return result or token or ""
+
+    async def remove_preset(self, camera_name: str, token: str) -> None:
+        """Delete a preset from the camera."""
+        cam = await self._get_initialized_cam(camera_name)
+
+        if not any(p["token"] == token for p in cam["preset_details"]):
+            raise OnvifRequestError(f"Preset {token} not found for {camera_name}")
+
+        await cam["ptz"].RemovePreset(
+            {
+                "ProfileToken": cam["move_request"].ProfileToken,
+                "PresetToken": token,
+            }
+        )
+        await self._load_presets(camera_name)
+
+    async def set_home(self, camera_name: str) -> None:
+        """Save the current camera position as the home position."""
+        cam = await self._get_initialized_cam(camera_name)
+
+        # the reported home capabilities are unreliable on some firmware, so
+        # let the camera decide and surface its fault instead of refusing here
+        await cam["ptz"].SetHomePosition(
+            {"ProfileToken": cam["move_request"].ProfileToken}
+        )
+
     async def _zoom(self, camera_name: str, command: OnvifCommandEnum) -> None:
         cam = self.cams[camera_name]
 
@@ -786,6 +938,8 @@ class OnvifController:
                 await self._stop(camera_name)
             elif command == OnvifCommandEnum.preset:
                 await self._move_to_preset(camera_name, param)
+            elif command == OnvifCommandEnum.home:
+                await self._goto_home(camera_name)
             elif command == OnvifCommandEnum.move_relative:
                 parts = param.split("_")
                 if len(parts) == 3:
@@ -834,6 +988,8 @@ class OnvifController:
             "name": camera_name,
             "features": cam["features"],
             "presets": list(cam["presets"]),
+            "preset_details": cam["preset_details"],
+            "max_presets": cam["max_presets"],
             "profiles": cam["profiles"],
         }
 
