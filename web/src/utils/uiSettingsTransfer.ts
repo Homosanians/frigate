@@ -61,6 +61,12 @@ export const TRANSFER_KEYS: TransferKey[] = [
     schema: z.boolean(),
   },
   {
+    key: "liveVideoFit",
+    section: "preferences",
+    namespaced: true,
+    schema: z.enum(["contain", "fill", "cover"]),
+  },
+  {
     key: "naturalAspectLayout",
     section: "preferences",
     namespaced: true,

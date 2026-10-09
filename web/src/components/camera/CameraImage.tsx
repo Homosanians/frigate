@@ -6,6 +6,8 @@ import { useResizeObserver } from "@/hooks/resize-observer";
 import { isDesktop } from "react-device-detect";
 import { cn } from "@/lib/utils";
 import { useEnabledState } from "@/api/ws";
+import { LiveVideoFit } from "@/types/live";
+import { VIDEO_FIT_CLASS } from "@/utils/videoUtil";
 
 type CameraImageProps = {
   className?: string;
@@ -13,6 +15,7 @@ type CameraImageProps = {
   onload?: () => void;
   searchParams?: string;
   rounded?: boolean;
+  fit?: LiveVideoFit;
 };
 
 export default function CameraImage({
@@ -21,6 +24,7 @@ export default function CameraImage({
   onload,
   searchParams = "",
   rounded = true,
+  fit = "contain",
 }: CameraImageProps) {
   const { data: config } = useSWR("config");
   const apiHost = useApiHost();
@@ -89,11 +93,12 @@ export default function CameraImage({
         <img
           ref={imgRef}
           className={cn(
-            "object-contain",
+            VIDEO_FIT_CLASS[fit],
+            // stretch and crop fill the container whatever the picture's shape
+            fit !== "contain" && "size-full",
             imageLoaded
-              ? isPortraitImage
-                ? "h-full w-auto"
-                : "h-auto w-full"
+              ? fit === "contain" &&
+                  (isPortraitImage ? "h-full w-auto" : "h-auto w-full")
               : "invisible",
             rounded && "rounded-lg md:rounded-2xl",
           )}

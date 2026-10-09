@@ -44,6 +44,7 @@ import {
   AudioState,
   LivePlayerError,
   LivePlayerMode,
+  LiveVideoFit,
   StatsState,
   VolumeState,
 } from "@/types/live";
@@ -227,6 +228,10 @@ export default function LiveDashboardView({
   const [globalAutoLive] = useUserPersistence("autoLiveView", true);
   const [displayCameraNames] = useUserPersistence("displayCameraNames", false);
   const [seamlessTiles] = useUserPersistence("seamlessLiveTiles", false);
+  const [videoFit] = useUserPersistence<LiveVideoFit>(
+    "liveVideoFit",
+    "contain",
+  );
 
   const { allGroupsStreamingSettings, setAllGroupsStreamingSettings } =
     useStreamingSettings();
@@ -539,6 +544,7 @@ export default function LiveDashboardView({
                       onClick={() => onSelectCamera("birdseye")}
                       containerRef={birdseyeContainerRef}
                       seamless={seamlessTiles}
+                      videoFit={videoFit}
                     />
                   </div>
                 )}
@@ -632,6 +638,7 @@ export default function LiveDashboardView({
                         }
                         alwaysShowCameraName={displayCameraNames}
                         seamless={seamlessTiles}
+                        videoFit={videoFit}
                         useWebGL={useWebGL}
                         playInBackground={false}
                         showStats={statsStates[camera.name]}

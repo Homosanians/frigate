@@ -14,6 +14,7 @@ import {
   LivePlayerError,
   TwoWayTalkError,
   LivePlayerMode,
+  LiveVideoFit,
   PlayerStatsType,
   VideoResolutionType,
 } from "@/types/live";
@@ -31,6 +32,7 @@ import { useCameraFriendlyName } from "@/hooks/use-camera-friendly-name";
 import { ImageShadowOverlay } from "../overlay/ImageShadowOverlay";
 import { getTranslatedLabel } from "@/utils/i18n";
 import { formatList } from "@/utils/stringUtil";
+import { VIDEO_FIT_CLASS } from "@/utils/videoUtil";
 
 type LivePlayerProps = {
   cameraRef?: (ref: HTMLDivElement | null) => void;
@@ -42,6 +44,7 @@ type LivePlayerProps = {
   showStillWithoutActivity?: boolean;
   alwaysShowCameraName?: boolean;
   seamless?: boolean;
+  videoFit?: LiveVideoFit;
   useWebGL: boolean;
   windowVisible?: boolean;
   playAudio?: boolean;
@@ -72,6 +75,7 @@ export default function LivePlayer({
   showStillWithoutActivity = true,
   alwaysShowCameraName = false,
   seamless = false,
+  videoFit = "contain",
   useWebGL = false,
   windowVisible = true,
   playAudio = false,
@@ -315,7 +319,11 @@ export default function LivePlayer({
     player = (
       <WebRtcPlayer
         key={`webrtc_${streamName}_${key}`}
-        className={`size-full ${liveReady ? "" : "hidden"}`}
+        className={cn(
+          "size-full",
+          VIDEO_FIT_CLASS[videoFit],
+          !liveReady && "hidden",
+        )}
         camera={streamName}
         playbackEnabled={cameraActive || liveReady}
         getStats={showStats}
@@ -338,7 +346,11 @@ export default function LivePlayer({
       player = (
         <MSEPlayer
           key={`mse_${streamName}_${key}`}
-          className={`size-full ${liveReady ? "" : "hidden"}`}
+          className={cn(
+            "size-full",
+            VIDEO_FIT_CLASS[videoFit],
+            !liveReady && "hidden",
+          )}
           camera={streamName}
           playbackEnabled={cameraActive || liveReady}
           audioEnabled={playAudio}
@@ -375,6 +387,7 @@ export default function LivePlayer({
           }
           useWebGL={useWebGL}
           rounded={!seamless}
+          fit={videoFit}
           setStats={setStats}
           containerRef={containerRef ?? internalContainerRef}
           onPlaying={playerIsPlaying}
@@ -428,7 +441,15 @@ export default function LivePlayer({
             className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center [container-type:size]"
             style={{ "--pic-ar": pictureAspect } as React.CSSProperties}
           >
-            <div className="relative aspect-[var(--pic-ar)] h-auto w-[min(100%,calc(100cqh*var(--pic-ar)))]">
+            <div
+              className={cn(
+                "relative",
+                // stretch and crop put the picture on the whole card
+                videoFit === "contain"
+                  ? "aspect-[var(--pic-ar)] h-auto w-[min(100%,calc(100cqh*var(--pic-ar)))]"
+                  : "size-full",
+              )}
+            >
               <ImageShadowOverlay />
             </div>
           </div>
@@ -514,6 +535,7 @@ export default function LivePlayer({
           reloadInterval={stillReloadInterval}
           periodicCache
           rounded={!seamless}
+          fit={videoFit}
         />
       </div>
 
