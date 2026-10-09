@@ -23,7 +23,6 @@ import { FaExclamationTriangle } from "react-icons/fa";
 import { LuCopy, LuRefreshCw } from "react-icons/lu";
 import { Button } from "@/components/ui/button";
 import Heading from "@/components/ui/heading";
-import { Toaster } from "@/components/ui/sonner";
 import { useAutoFrigateStats } from "@/hooks/use-stats";
 
 type Failure = {
@@ -147,7 +146,6 @@ function PagePanel({ failure }: PanelProps) {
           {t("error.copyDetails")}
         </Button>
       </div>
-      <Toaster position="top-center" closeButton={true} />
     </div>
   );
 }

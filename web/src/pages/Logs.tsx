@@ -20,7 +20,6 @@ import LogInfoDialog from "@/components/overlay/LogInfoDialog";
 import { LogChip } from "@/components/indicators/Chip";
 import { LogSettingsButton } from "@/components/filter/LogSettingsButton";
 import { FaCopy, FaDownload } from "react-icons/fa";
-import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import ActivityIndicator from "@/components/indicators/activity-indicator";
 import { cn } from "@/lib/utils";
@@ -497,7 +496,6 @@ function Logs() {
 
   return (
     <div className="flex size-full flex-col p-2">
-      <Toaster position="top-center" closeButton={true} />
       <LogInfoDialog logLine={selectedLog} setLogLine={setSelectedLog} />
 
       <div className="relative flex h-11 w-full items-center justify-between">

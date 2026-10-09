@@ -15,7 +15,6 @@ import { CameraConfig } from "@/types/frigateConfig";
 import { useEffect, useState } from "react";
 import axios from "axios";
 import { toast } from "sonner";
-import { Toaster } from "../ui/sonner";
 import { Trans, useTranslation } from "react-i18next";
 import { useCameraFriendlyName } from "@/hooks/use-camera-friendly-name";
 
@@ -86,7 +85,6 @@ export default function CameraInfoDialog({
 
   return (
     <>
-      <Toaster position="top-center" />
       <Dialog
         open={showCameraInfoDialog}
         onOpenChange={setShowCameraInfoDialog}

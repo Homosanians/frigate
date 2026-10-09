@@ -75,7 +75,6 @@ import {
 import useOptimisticState from "@/hooks/use-optimistic-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import scrollIntoView from "scroll-into-view-if-needed";
-import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { FilterList, LAST_24_HOURS_KEY } from "@/types/filter";
@@ -363,7 +362,6 @@ export default function EventView({
 
   return (
     <div className="flex size-full flex-col pt-2 md:py-2">
-      <Toaster closeButton={true} />
       {!motionPreviewsOpen && (
         <div className="relative mb-2 flex h-11 items-center justify-between pl-2 pr-2 md:pl-3">
           {isMobile && (

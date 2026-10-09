@@ -45,7 +45,6 @@ import {
 } from "react-device-detect";
 import { IoMdArrowRoundBack } from "react-icons/io";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Toaster } from "@/components/ui/sonner";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import useSWR from "swr";
 import { TimeRange, TimelineType } from "@/types/timeline";
@@ -721,7 +720,6 @@ export function RecordingView({
       camera={mainCamera}
     >
       <div ref={contentRef} className="flex size-full flex-col pt-2">
-        <Toaster closeButton={true} />
         <div className="relative mb-2 flex h-11 w-full items-center justify-between px-2">
           {isMobile && (
             <Logo className="absolute inset-x-1/2 h-8 -translate-x-1/2" />

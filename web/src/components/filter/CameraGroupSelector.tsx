@@ -54,7 +54,6 @@ import IconWrapper from "../ui/icon-wrapper";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import ActivityIndicator from "../indicators/activity-indicator";
 import { deleteUserNamespacedKey } from "@/hooks/use-user-persistence";
@@ -444,11 +443,6 @@ function NewGroupDialog({
 
   return (
     <>
-      <Toaster
-        className="toaster group z-[100]"
-        position="top-center"
-        closeButton={true}
-      />
       <Overlay open={open} onOpenChange={setOpen}>
         <Content
           className={cn(
@@ -567,11 +561,6 @@ export function EditGroupDialog({
 
   return (
     <>
-      <Toaster
-        className="toaster group z-[100]"
-        position="top-center"
-        closeButton={true}
-      />
       <Overlay
         open={open}
         onOpenChange={(open) => {

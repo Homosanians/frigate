@@ -47,7 +47,6 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@/components/ui/tooltip";
-import { Toaster } from "@/components/ui/sonner";
 import LiveContextMenu from "@/components/menu/LiveContextMenu";
 import { useStreamingSettings } from "@/context/streaming-settings-provider";
 import { useTranslation } from "react-i18next";
@@ -669,7 +668,6 @@ export default function DraggableGridLayout({
 
   return (
     <>
-      <Toaster position="top-center" closeButton={true} />
       {!isGridLayoutLoaded ||
       !currentGridLayout ||
       !isEqual(cameras, currentCameras) ||

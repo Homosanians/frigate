@@ -4,7 +4,6 @@ import ActivityIndicator from "@/components/indicators/activity-indicator";
 import SearchDetailDialog, {
   SearchTab,
 } from "@/components/overlay/detail/SearchDetailDialog";
-import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import { FrigateConfig } from "@/types/frigateConfig";
 import { SearchFilter, SearchResult, SearchSource } from "@/types/search";
@@ -513,7 +512,6 @@ export default function SearchView({
 
   return (
     <div className="flex size-full flex-col pt-2 md:py-2">
-      <Toaster closeButton={true} />
       <div className="relative">
         {searchDetail && (
           <SearchDetailDialog

@@ -94,7 +94,6 @@ import {
   MobilePageHeader,
   MobilePageTitle,
 } from "@/components/mobile/MobilePage";
-import { Toaster } from "@/components/ui/sonner";
 import axios from "axios";
 import { toast } from "sonner";
 import { mutate } from "swr";
@@ -1511,7 +1510,6 @@ export default function Settings() {
   if (isMobile) {
     return (
       <>
-        <Toaster position="top-center" closeButton={true} />
         {!contentMobileOpen && (
           <div
             key={`mobile-menu-${selectedCamera}`}
@@ -1767,7 +1765,6 @@ export default function Settings() {
 
   return (
     <div className="flex h-full flex-col">
-      <Toaster position="top-center" closeButton={true} />
       <div className="flex min-h-16 items-center justify-between border-b border-secondary p-3">
         <div className="mr-2 flex w-full items-center justify-between gap-3">
           <Heading as="h3" className="mb-0">

@@ -100,7 +100,6 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import axios from "axios";
 import { toast } from "sonner";
-import { Toaster } from "@/components/ui/sonner";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { useTranslation } from "react-i18next";
 import { useDocDomain } from "@/hooks/use-doc-domain";
@@ -659,7 +658,6 @@ export default function LiveCameraView({
       disabled={debug || clickOverlay}
       panning={{ disabled: clickOverlay }}
     >
-      <Toaster position="top-center" closeButton={true} />
       <div
         ref={mainRef}
         className={

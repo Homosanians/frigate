@@ -20,6 +20,7 @@ import { AuthContext } from "@/context/auth-context";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { isSetupDismissed } from "@/utils/setupWizard";
 import { ChromeErrorBoundary, LazyPage } from "@/components/ErrorBoundaries";
+import { Toaster } from "@/components/ui/sonner";
 
 const Live = lazy(() => import("@/pages/Live"));
 const Events = lazy(() => import("@/pages/Events"));
@@ -47,6 +48,8 @@ function App() {
       <BrowserRouter basename={window.baseUrl}>
         <Wrapper>
           {config?.safe_mode ? <SafeAppView /> : <DefaultAppView />}
+          {/* every mounted Toaster renders every toast, so the app keeps one */}
+          <Toaster position="top-center" closeButton={true} />
         </Wrapper>
       </BrowserRouter>
     </Providers>

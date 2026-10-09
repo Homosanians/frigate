@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import axios, { AxiosError } from "axios";
 import copy from "copy-to-clipboard";
 import { useTheme } from "@/context/theme-provider";
-import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { LuCopy, LuSave } from "react-icons/lu";
 import { MdOutlineRestartAlt } from "react-icons/md";
@@ -318,7 +317,6 @@ function ConfigEditor() {
           <div ref={configRef} className="flex-1 overflow-hidden" />
         </div>
       </div>
-      <Toaster closeButton={true} />
       <RestartDialog
         isOpen={restartDialogOpen}
         onClose={() => setRestartDialogOpen(false)}

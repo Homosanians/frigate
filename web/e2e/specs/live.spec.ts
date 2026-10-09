@@ -346,6 +346,7 @@ test.describe("Live PTZ preset management @high", () => {
     await expect(
       frigateApp.page.getByText("Preset saved").first(),
     ).toBeVisible();
+    await expect(frigateApp.page.getByText("Preset saved")).toHaveCount(1);
     await expect(dialog).not.toBeVisible();
   });
 
@@ -379,6 +380,9 @@ test.describe("Live PTZ preset management @high", () => {
     await expect(
       frigateApp.page.getByText("The camera rejected the request").first(),
     ).toBeVisible();
+    await expect(
+      frigateApp.page.getByText("The camera rejected the request"),
+    ).toHaveCount(1);
     await expect(dialog).toBeVisible();
   });
 
@@ -540,6 +544,9 @@ test.describe("Live PTZ preset management @high", () => {
     await expect(
       frigateApp.page.getByText("Home position saved").first(),
     ).toBeVisible();
+    await expect(frigateApp.page.getByText("Home position saved")).toHaveCount(
+      1,
+    );
   });
 
   test("fixed home position hides set home", async ({ frigateApp }) => {

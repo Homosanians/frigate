@@ -27,7 +27,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Toaster } from "@/components/ui/sonner";
 import useKeyboardListener from "@/hooks/use-keyboard-listener";
 import { useSearchEffect } from "@/hooks/use-overlay-state";
 import { useHistoryBack } from "@/hooks/use-history-back";
@@ -569,8 +568,6 @@ function Exports() {
 
   return (
     <div className="flex size-full flex-col gap-2 overflow-hidden px-1 pt-2 md:p-2">
-      <Toaster closeButton={true} />
-
       <CaseEditorDialog
         caseDialog={caseDialog}
         onClose={() => setCaseDialog(undefined)}

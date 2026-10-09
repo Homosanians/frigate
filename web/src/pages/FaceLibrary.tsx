@@ -31,7 +31,6 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { Toaster } from "@/components/ui/sonner";
 import {
   Tooltip,
   TooltipContent,
@@ -339,8 +338,6 @@ export default function FaceLibrary() {
 
   return (
     <div className="flex size-full flex-col p-2">
-      <Toaster />
-
       <AlertDialog
         open={!!deleteDialogOpen}
         onOpenChange={() => setDeleteDialogOpen(null)}

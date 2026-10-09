@@ -21,7 +21,6 @@ import { useJobStatus } from "@/api/ws";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1285,7 +1284,6 @@ export default function MotionSearchView({
       camera={selectedCamera ?? ""}
     >
       <div ref={contentRef} className="flex size-full flex-col pt-2">
-        <Toaster closeButton={true} position="top-center" />
         <MotionSearchDialog
           open={isSearchDialogOpen}
           onOpenChange={handleSearchDialogOpenChange}

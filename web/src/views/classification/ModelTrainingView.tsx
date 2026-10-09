@@ -24,7 +24,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Toaster } from "@/components/ui/sonner";
 import {
   Tooltip,
   TooltipContent,
@@ -376,8 +375,6 @@ export default function ModelTrainingView({ model }: ModelTrainingViewProps) {
 
   return (
     <div className="flex size-full flex-col overflow-hidden">
-      <Toaster />
-
       <AlertDialog
         open={!!deleteDialogOpen}
         onOpenChange={() => setDeleteDialogOpen(null)}

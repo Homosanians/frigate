@@ -31,7 +31,6 @@ import { DebugReplayConfigSheet } from "@/components/overlay/DebugReplayConfigSh
 import { useCameraActivity } from "@/hooks/use-camera-activity";
 import { cn } from "@/lib/utils";
 import Heading from "@/components/ui/heading";
-import { Toaster } from "@/components/ui/sonner";
 import { CameraConfig, FrigateConfig } from "@/types/frigateConfig";
 import { getIconForLabel } from "@/utils/iconUtil";
 import { getTranslatedLabel } from "@/utils/i18n";
@@ -303,8 +302,6 @@ export default function Replay() {
 
   return (
     <div className="flex size-full flex-col overflow-hidden">
-      <Toaster position="top-center" closeButton={true} />
-
       {/* Top bar */}
       <div className="flex min-h-12 items-center justify-between border-b border-secondary px-2 py-2 md:min-h-16 md:px-3 md:py-3">
         {isMobile && (
