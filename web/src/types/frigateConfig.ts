@@ -207,6 +207,7 @@ export interface CameraConfig {
       movement_weights: string[];
       required_zones: string[];
       return_preset: string;
+      stream_latency: number | null;
       timeout: number;
       track: string[];
       zoom_factor: number;

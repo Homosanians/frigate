@@ -1153,6 +1153,10 @@ cameras:
         return_preset: home
         # Optional: Seconds to delay before returning to preset. (default: shown below)
         timeout: 10
+        # Optional: Seconds the video keeps showing a PTZ move after the camera reports it finished. (default: shown below)
+        # By default Frigate measures this after every move by watching for the video to stop moving.
+        # Only set it if the measurement is unreliable for your camera.
+        stream_latency: None
         # Optional: Values generated automatically by a camera calibration. Do not modify these manually. (default: shown below)
         movement_weights: []
 

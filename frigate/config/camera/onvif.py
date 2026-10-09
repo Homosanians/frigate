@@ -58,6 +58,13 @@ class PtzAutotrackConfig(FrigateBaseModel):
         title="Return timeout",
         description="Wait this many seconds after losing tracking before returning camera to preset position.",
     )
+    stream_latency: float | None = Field(
+        default=None,
+        title="Stream latency",
+        description="Seconds the video keeps showing a PTZ move after the camera reports it finished. Leave unset to measure it after every move.",
+        ge=0.0,
+        le=5.0,
+    )
     movement_weights: str | list[str] | None = Field(
         default_factory=list,
         title="Movement weights",

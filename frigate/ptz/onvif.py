@@ -610,9 +610,14 @@ class OnvifController:
         # only track start_time for autotracking
         if camera_config.onvif.autotracking.enabled:
             metrics.motor_stopped.clear()
-            logger.debug(f"{camera_name}: PTZ start time: {metrics.frame_time.value}")
-            metrics.start_time.value = metrics.frame_time.value
+            # frames are stamped when Frigate receives them, so compare them with
+            # the actual time of the move; the newest frame can trail it
+            metrics.start_time.value = time.time()
             metrics.stop_time.value = 0
+            metrics.video_stop_time.value = 0
+            metrics.move_pan.value = pan
+            metrics.move_tilt.value = tilt
+            logger.debug(f"{camera_name}: PTZ start time: {metrics.start_time.value}")
 
         move_request = cam["relative_move_request"]
 
@@ -676,6 +681,9 @@ class OnvifController:
         cam["active"] = True
         metrics.start_time.value = 0
         metrics.stop_time.value = 0
+        metrics.video_stop_time.value = 0
+        metrics.move_pan.value = 0
+        metrics.move_tilt.value = 0
         move_request = cam["move_request"]
         preset_token = cam["presets"][preset]
 
@@ -700,6 +708,9 @@ class OnvifController:
         cam["active"] = True
         metrics.start_time.value = 0
         metrics.stop_time.value = 0
+        metrics.video_stop_time.value = 0
+        metrics.move_pan.value = 0
+        metrics.move_tilt.value = 0
 
         await cam["ptz"].GotoHomePosition(
             {"ProfileToken": cam["move_request"].ProfileToken}
@@ -861,9 +872,12 @@ class OnvifController:
 
         cam["active"] = True
         metrics.motor_stopped.clear()
-        logger.debug(f"{camera_name}: PTZ start time: {metrics.frame_time.value}")
-        metrics.start_time.value = metrics.frame_time.value
+        metrics.start_time.value = time.time()
         metrics.stop_time.value = 0
+        metrics.video_stop_time.value = 0
+        metrics.move_pan.value = 0
+        metrics.move_tilt.value = 0
+        logger.debug(f"{camera_name}: PTZ start time: {metrics.start_time.value}")
         # function takes in 0 to 1 for zoom, interpolate to the values of the camera.
         zoom = numpy.interp(
             zoom,
@@ -1139,23 +1153,24 @@ class OnvifController:
                 cam["active"] = False
                 if not metrics.motor_stopped.is_set():
                     metrics.motor_stopped.set()
+                    metrics.stop_time.value = time.time()
 
                     logger.debug(
-                        f"{camera_name}: PTZ stop time: {metrics.frame_time.value}"
+                        f"{camera_name}: PTZ stop time: {metrics.stop_time.value}"
                     )
-
-                    metrics.stop_time.value = metrics.frame_time.value
             else:
                 cam["active"] = True
                 if metrics.motor_stopped.is_set():
                     metrics.motor_stopped.clear()
+                    metrics.start_time.value = time.time()
+                    metrics.stop_time.value = 0
+                    metrics.video_stop_time.value = 0
+                    metrics.move_pan.value = 0
+                    metrics.move_tilt.value = 0
 
                     logger.debug(
-                        f"{camera_name}: PTZ start time: {metrics.frame_time.value}"
+                        f"{camera_name}: PTZ start time: {metrics.start_time.value}"
                     )
-
-                    metrics.start_time.value = metrics.frame_time.value
-                    metrics.stop_time.value = 0
 
             if camera_config.onvif.autotracking.zooming != ZoomingModeEnum.disabled:
                 # store absolute zoom level as 0 to 1 interpolated from the values of the camera
@@ -1183,7 +1198,7 @@ class OnvifController:
                     f"Start time: {metrics.start_time.value}, Stop time: {metrics.stop_time.value}, Frame time: {metrics.frame_time.value}"
                 )
                 # set the stop time so we don't come back into this again and spam the logs
-                metrics.stop_time.value = metrics.frame_time.value
+                metrics.stop_time.value = time.time()
                 logger.warning(
                     f"Camera {camera_name} is still in ONVIF 'MOVING' status."
                 )

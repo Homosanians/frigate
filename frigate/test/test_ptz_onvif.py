@@ -14,7 +14,7 @@ import asyncio
 import threading
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from frigate.camera import PTZMetrics
 from frigate.config import FrigateConfig
@@ -208,9 +208,10 @@ class TestManualRelativeMoveMetrics(unittest.IsolatedAsyncioTestCase):
         metrics = controller.ptz_metrics[CAMERA]
         metrics.frame_time.value = 1000.0
 
-        await controller._move_relative(CAMERA, 0.25, -0.25, 0, 1)
+        with patch("frigate.ptz.onvif.time.time", return_value=1000.1):
+            await controller._move_relative(CAMERA, 0.25, -0.25, 0, 1)
 
-        self.assertEqual(metrics.start_time.value, 1000.0)
+        self.assertEqual(metrics.start_time.value, 1000.1)
         self.assertEqual(metrics.stop_time.value, 0)
         self.assertFalse(metrics.motor_stopped.is_set())
         self.assertTrue(
@@ -218,6 +219,62 @@ class TestManualRelativeMoveMetrics(unittest.IsolatedAsyncioTestCase):
                 1001.0, metrics.start_time.value, metrics.stop_time.value
             )
         )
+
+
+class TestMoveTimestamps(unittest.IsolatedAsyncioTestCase):
+    """Frames are stamped when Frigate receives them. The newest frame can be a
+    frame interval or more older than the moment the move starts or stops, so
+    the move is timed with the clock, not with the newest frame time."""
+
+    async def test_move_start_uses_the_clock(self) -> None:
+        controller = _make_move_controller(autotracking_enabled=True)
+        metrics = controller.ptz_metrics[CAMERA]
+        metrics.frame_time.value = 1000.0
+
+        with patch("frigate.ptz.onvif.time.time", return_value=1000.15):
+            await controller._move_relative(CAMERA, 0.25, 0, 0, 1)
+
+        self.assertEqual(metrics.start_time.value, 1000.15)
+
+    async def test_move_clears_the_previous_video_stop(self) -> None:
+        # the camera process sets it again once the video shows this move ended
+        controller = _make_move_controller(autotracking_enabled=True)
+        metrics = controller.ptz_metrics[CAMERA]
+        metrics.video_stop_time.value = 999.5
+
+        await controller._move_relative(CAMERA, 0.25, 0, 0, 1)
+
+        self.assertEqual(metrics.video_stop_time.value, 0)
+
+    async def test_move_publishes_the_distance_to_expect_in_the_video(self) -> None:
+        controller = _make_move_controller(autotracking_enabled=True)
+        metrics = controller.ptz_metrics[CAMERA]
+
+        await controller._move_relative(CAMERA, 0.25, -0.1, 0, 1)
+
+        self.assertEqual(metrics.move_pan.value, 0.25)
+        self.assertEqual(metrics.move_tilt.value, -0.1)
+
+    async def test_move_stop_uses_the_clock(self) -> None:
+        controller = _make_move_controller(autotracking_enabled=True)
+        controller.status_locks = {CAMERA: asyncio.Lock()}
+        controller.cams[CAMERA]["move_request"] = MagicMock(ProfileToken="profile")
+        status = MagicMock()
+        status.MoveStatus.PanTilt = "IDLE"
+        status.MoveStatus.Zoom = "IDLE"
+        controller.cams[CAMERA]["ptz"].GetStatus = AsyncMock(return_value=status)
+
+        metrics = controller.ptz_metrics[CAMERA]
+        metrics.start_time.value = 1000.0
+        metrics.motor_stopped.clear()
+        # the newest frame was received before the camera reported IDLE
+        metrics.frame_time.value = 1001.0
+
+        with patch("frigate.ptz.onvif.time.time", return_value=1001.18):
+            await controller.get_camera_status(CAMERA)
+
+        self.assertTrue(metrics.motor_stopped.is_set())
+        self.assertEqual(metrics.stop_time.value, 1001.18)
 
 
 class _Preset(dict):

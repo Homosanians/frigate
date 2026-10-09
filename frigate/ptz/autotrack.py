@@ -30,6 +30,13 @@ from frigate.const import (
     AUTOTRACKING_MAX_MOVE_METRICS,
     AUTOTRACKING_MOTION_MAX_POINTS,
     AUTOTRACKING_MOTION_MIN_DISTANCE,
+    AUTOTRACKING_RETURN_TIMEOUT,
+    AUTOTRACKING_SETTLE_HISTORY,
+    AUTOTRACKING_SETTLE_MIN_MOVE,
+    AUTOTRACKING_SETTLE_MOTION_STEP,
+    AUTOTRACKING_SETTLE_MOVE_FRACTION,
+    AUTOTRACKING_SETTLE_QUIET,
+    AUTOTRACKING_SETTLE_TIMEOUT,
     AUTOTRACKING_ZOOM_EDGE_THRESHOLD,
     AUTOTRACKING_ZOOM_IN_HYSTERESIS,
     AUTOTRACKING_ZOOM_OUT_HYSTERESIS,
@@ -48,14 +55,227 @@ def calculate_max_target_box(zoom_factor: float) -> float:
     return AUTOTRACKING_MAX_AREA_RATIO ** (1 / zoom_factor)
 
 
-def ptz_moving_at_frame_time(frame_time, ptz_start_time, ptz_stop_time):
-    # Determine if the PTZ was in motion at the set frame time
+def ptz_moving_at_frame_time(
+    frame_time, ptz_start_time, ptz_stop_time, video_stop_time=None
+):
+    # Determine if the frame shows the PTZ in motion
     # for non ptz/autotracking cameras, this will always return False
     # ptz_start_time is initialized to 0 on startup and only changes
     # when autotracking movements are made
-    return (ptz_start_time != 0.0 and frame_time > ptz_start_time) and (
-        ptz_stop_time == 0.0 or (ptz_start_time <= frame_time <= ptz_stop_time)
+    if ptz_start_time == 0.0 or frame_time <= ptz_start_time:
+        return False
+
+    # frames are stamped when Frigate receives them, so the video keeps showing
+    # a move after the camera reports it finished. video_stop_time is the last
+    # frame that still showed it, and anything up to the start of this move
+    # belongs to an earlier one
+    if video_stop_time is not None:
+        return video_stop_time <= ptz_start_time or frame_time <= video_stop_time
+
+    return ptz_stop_time == 0.0 or frame_time <= ptz_stop_time
+
+
+def frame_captured_after_ptz_move(
+    frame_time, ptz_start_time, ptz_stop_time, video_stop_time
+) -> bool:
+    """Return True if a frame shows the scene after the last PTZ move finished.
+
+    An earlier frame shows objects where they were before the move corrected
+    for them, so moving again from it repeats that correction.
+    """
+    if ptz_start_time == 0.0:
+        return True
+
+    # the camera is still moving, or the video has not caught up with it yet
+    if ptz_stop_time == 0.0 or video_stop_time <= ptz_start_time:
+        return False
+
+    return frame_time > video_stop_time
+
+
+def frame_shift(previous, current, width: int, height: int) -> float:
+    """Return how far the camera moved between two frames, in pixels.
+
+    Measured at the frame corners, since a zoom leaves the center in place.
+    """
+    corners = np.array([[0, 0], [width, 0], [0, height], [width, height]], float)
+    return float(
+        np.max(
+            np.linalg.norm(
+                current.rel_to_abs(corners) - previous.rel_to_abs(corners), axis=1
+            )
+        )
     )
+
+
+class PtzSettleObserver:
+    """Find the last frame that still shows each PTZ move.
+
+    Frames reach Frigate some time after the camera captures them, so the video
+    keeps showing a move after the camera reports it finished. Until it
+    settles, frames show objects where they were before the move. How long that
+    takes after the reported stop is also a measurement of the stream latency.
+    """
+
+    def __init__(self, config: CameraConfig, ptz_metrics: PTZMetrics) -> None:
+        self.camera_config = config
+        self.ptz_metrics = ptz_metrics
+        self.latencies: deque[float] = deque(maxlen=AUTOTRACKING_SETTLE_HISTORY)
+        self._move_start = 0.0
+        self._reference = None
+        self._mark = 0.0
+        self._last_motion: float | None = None
+        self._seen_move = False
+        self._done = False
+        self._expected = 0.0
+        self._shown = 0.0
+
+    @property
+    def measured_latency(self) -> float | None:
+        if not self.latencies:
+            return None
+
+        return float(np.median(self.latencies))
+
+    def watching(self, frame_time: float) -> bool:
+        """Return True while the latest move can still show up in the video."""
+        start = self.ptz_metrics.start_time.value
+
+        if start == 0.0 or frame_time <= start:
+            return False
+
+        return start != self._move_start or not self._done
+
+    def reset_reference(self) -> None:
+        """Forget estimates made against the motion estimator's old reference."""
+        self._reference = None
+        self._mark = 0.0
+
+    def update(self, frame_time: float, transform) -> None:
+        """Take this frame's camera motion estimate, None if there is none."""
+        metrics = self.ptz_metrics
+        start = metrics.start_time.value
+        stop = metrics.stop_time.value
+
+        if start == 0.0 or frame_time <= start:
+            return
+
+        if start != self._move_start:
+            self._move_start = start
+            self._reference = None
+            self._mark = 0.0
+            self._last_motion = None
+            self._seen_move = False
+            self._done = False
+            self._expected = 0.0
+            self._shown = 0.0
+
+        if self._done:
+            return
+
+        width = self.camera_config.detect.width
+        height = self.camera_config.detect.height
+        quiet = False
+
+        if transform is not None:
+            # the first estimate of the move still shows where it started from
+            if self._reference is None:
+                self._reference = transform
+
+            shown = frame_shift(self._reference, transform, width, height)
+
+            # the video is moving while the frame keeps getting further from
+            # where the move started, even if a slow motor moves it only a
+            # little each frame
+            if shown >= self._mark + AUTOTRACKING_SETTLE_MOTION_STEP * width:
+                self._mark = shown
+                self._last_motion = frame_time
+            else:
+                quiet = (
+                    self._last_motion is not None
+                    and frame_time - self._last_motion >= AUTOTRACKING_SETTLE_QUIET
+                )
+
+            # noise or a walking person can shift a frame a little, the move
+            # counts once the video shows a good part of the commanded distance.
+            # how far a preset return or a zoom moves the frame is unknown
+            self._expected = float(
+                np.hypot(
+                    metrics.move_pan.value * width / 2,
+                    metrics.move_tilt.value * height / 2,
+                )
+            )
+            self._shown = max(self._shown, shown)
+            if self._shown >= max(
+                AUTOTRACKING_SETTLE_MOVE_FRACTION * self._expected,
+                AUTOTRACKING_SETTLE_MIN_MOVE * width,
+            ):
+                self._seen_move = True
+
+        # the camera still reports moving
+        if stop == 0.0:
+            return
+
+        configured = self.camera_config.onvif.autotracking.stream_latency
+        if configured is not None:
+            self._settle(stop + configured)
+            return
+
+        # nothing that looks like the move reached the video in time
+        if frame_time > stop + AUTOTRACKING_SETTLE_TIMEOUT:
+            logger.debug(
+                "%s: video did not show the PTZ move within %.1fs of PTZ stop",
+                self.camera_config.name,
+                AUTOTRACKING_SETTLE_TIMEOUT,
+            )
+            self._done = True
+
+            if metrics.video_stop_time.value <= start:
+                metrics.video_stop_time.value = frame_time
+            return
+
+        if quiet and self._seen_move:
+            self._settle(self._last_motion, stop)
+            return
+
+        # a small move, or a camera that pans less than asked, may not be
+        # recognizable in the video. once it has started to show, go by the
+        # latency measured so far rather than hold up tracking, and keep
+        # watching in case more of it shows up later
+        latency = self.measured_latency
+        if (
+            latency is not None
+            and self._last_motion is not None
+            and metrics.video_stop_time.value <= start
+            and frame_time
+            > stop + max(latency, 0.0) + 2 / self.camera_config.detect.fps
+        ):
+            logger.debug(
+                "%s: video showed %d%% of the commanded PTZ move, going by the "
+                "measured stream latency",
+                self.camera_config.name,
+                round(100 * self._shown / self._expected) if self._expected else 0,
+            )
+            metrics.video_stop_time.value = frame_time
+
+    def _settle(self, video_stop_time: float, stop: float | None = None) -> None:
+        self.ptz_metrics.video_stop_time.value = video_stop_time
+        self._done = True
+
+        # only a move of known size seen ending in the video measures the latency
+        if stop is None or self._expected == 0.0:
+            return
+
+        self.latencies.append(video_stop_time - stop)
+        self.ptz_metrics.stream_latency.value = max(0.0, self.measured_latency)
+        logger.debug(
+            "%s: video settled %.2fs after PTZ stop and showed %d%% of the commanded "
+            "move, measured stream latency %.2fs",
+            self.camera_config.name,
+            video_stop_time - stop,
+            round(100 * self._shown / self._expected),
+            self.measured_latency,
+        )
 
 
 def transform_is_finite(coord_transformations) -> bool:
@@ -82,6 +302,7 @@ class PtzMotionEstimator:
         self.coord_transformations = None
         self.ptz_metrics = ptz_metrics
         self.ptz_metrics.reset.set()
+        self.settle_observer = PtzSettleObserver(config, ptz_metrics)
         logger.debug(f"{config.name}: Motion estimator init")
 
     def motion_estimator(
@@ -113,77 +334,94 @@ class PtzMotionEstimator:
             )
 
             self.coord_transformations = None
+            self.settle_observer.reset_reference()
 
-        if ptz_moving_at_frame_time(
+        estimate = None
+
+        if self.settle_observer.watching(frame_time) or ptz_moving_at_frame_time(
             frame_time,
             self.ptz_metrics.start_time.value,
             self.ptz_metrics.stop_time.value,
+            self.ptz_metrics.video_stop_time.value,
         ):
             logger.debug(
                 f"{camera}: Motion estimator running - frame time: {frame_time}"
             )
 
-            yuv_frame = self.frame_manager.get(
-                frame_name, self.camera_config.frame_shape_yuv
-            )
+            self._estimate(detections, frame_name, frame_time, camera)
+            estimate = self.coord_transformations
 
-            if yuv_frame is None:
-                self.coord_transformations = None
-                return None
-
-            frame = cv2.cvtColor(yuv_frame, cv2.COLOR_YUV2GRAY_I420)
-
-            # mask out detections for better motion estimation
-            mask = np.ones(frame.shape[:2], frame.dtype)
-
-            detection_boxes = [x[2] for x in detections]
-            for detection in detection_boxes:
-                x1, y1, x2, y2 = detection
-                mask[y1:y2, x1:x2] = 0
-
-            # merge camera config motion mask with detections. Norfair function needs 0,1 mask
-            mask = np.bitwise_and(mask, self.camera_config.motion.rasterized_mask).clip(
-                max=1
-            )
-
-            # Norfair estimator function needs color so it can convert it right back to gray
-            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGRA)
-
-            try:
-                self.coord_transformations = self.norfair_motion_estimator.update(
-                    frame, mask
-                )
-            except Exception:
-                # sometimes opencv can't find enough features in the image to find homography, so catch this error
-                # https://github.com/tryolabs/norfair/pull/278
-                logger.warning(
-                    f"Autotracker: motion estimator couldn't get transformations for {camera} at frame time {frame_time}"
-                )
-                self.coord_transformations = None
-
-            # A degenerate homography can yield non-finite transform values that
-            # norfair would accumulate and feed to the tracker as nan estimates.
-            # Drop the bad transform and request a reset so the estimator rebuilds
-            # a fresh reference frame instead of poisoning every following frame.
-            if self.coord_transformations is not None and not transform_is_finite(
-                self.coord_transformations
-            ):
-                logger.warning(
-                    f"Autotracker: motion estimator produced a non-finite transform for {camera} at frame time {frame_time}, resetting"
-                )
-                self.coord_transformations = None
-                self.ptz_metrics.reset.set()
-
-            try:
-                logger.debug(
-                    f"{camera}: Motion estimator transformation: {self.coord_transformations.rel_to_abs([[0, 0]])}"
-                )
-            except Exception:
-                pass
-
-            self.frame_manager.close(frame_name)
+        self.settle_observer.update(frame_time, estimate)
 
         return self.coord_transformations
+
+    def _estimate(
+        self,
+        detections: list[tuple[Any, Any, Any, Any, Any, Any]],
+        frame_name: str,
+        frame_time: float,
+        camera: str | None,
+    ) -> None:
+        """Update coord_transformations with the camera motion in this frame."""
+        yuv_frame = self.frame_manager.get(
+            frame_name, self.camera_config.frame_shape_yuv
+        )
+
+        if yuv_frame is None:
+            self.coord_transformations = None
+            return
+
+        frame = cv2.cvtColor(yuv_frame, cv2.COLOR_YUV2GRAY_I420)
+
+        # mask out detections for better motion estimation
+        mask = np.ones(frame.shape[:2], frame.dtype)
+
+        detection_boxes = [x[2] for x in detections]
+        for detection in detection_boxes:
+            x1, y1, x2, y2 = detection
+            mask[y1:y2, x1:x2] = 0
+
+        # merge camera config motion mask with detections. Norfair function needs 0,1 mask
+        mask = np.bitwise_and(mask, self.camera_config.motion.rasterized_mask).clip(
+            max=1
+        )
+
+        # Norfair estimator function needs color so it can convert it right back to gray
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGRA)
+
+        try:
+            self.coord_transformations = self.norfair_motion_estimator.update(
+                frame, mask
+            )
+        except Exception:
+            # sometimes opencv can't find enough features in the image to find homography, so catch this error
+            # https://github.com/tryolabs/norfair/pull/278
+            logger.warning(
+                f"Autotracker: motion estimator couldn't get transformations for {camera} at frame time {frame_time}"
+            )
+            self.coord_transformations = None
+
+        # A degenerate homography can yield non-finite transform values that
+        # norfair would accumulate and feed to the tracker as nan estimates.
+        # Drop the bad transform and request a reset so the estimator rebuilds
+        # a fresh reference frame instead of poisoning every following frame.
+        if self.coord_transformations is not None and not transform_is_finite(
+            self.coord_transformations
+        ):
+            logger.warning(
+                f"Autotracker: motion estimator produced a non-finite transform for {camera} at frame time {frame_time}, resetting"
+            )
+            self.coord_transformations = None
+            self.ptz_metrics.reset.set()
+
+        try:
+            logger.debug(
+                f"{camera}: Motion estimator transformation: {self.coord_transformations.rel_to_abs([[0, 0]])}"
+            )
+        except Exception:
+            pass
+
+        self.frame_manager.close(frame_name)
 
 
 class PtzAutoTracker(threading.Thread):
@@ -345,6 +583,55 @@ class PtzAutoTracker(threading.Thread):
         while not metrics.motor_stopped.is_set():
             await self.onvif.get_camera_status(camera)
 
+    async def _wait_until_video_settled(self, camera: str) -> None:
+        """Wait for the camera process to see the latest move end in the video."""
+        metrics = self.ptz_metrics[camera]
+        deadline = time.time() + AUTOTRACKING_SETTLE_TIMEOUT + 1
+
+        while (
+            metrics.video_stop_time.value <= metrics.start_time.value
+            and time.time() < deadline
+        ):
+            await asyncio.sleep(0.1)
+
+    async def _return_to_preset(self, camera: str) -> None:
+        """Move to the return preset and wait for the motor to stop.
+
+        The return is timed like any other move, so frames that still show it
+        are not used to start tracking. How far the preset is is unknown.
+        """
+        metrics = self.ptz_metrics[camera]
+
+        await self.onvif._move_to_preset(
+            camera,
+            self.config.cameras[camera].onvif.autotracking.return_preset.lower(),
+        )
+
+        metrics.start_time.value = time.time()
+        metrics.stop_time.value = 0
+        metrics.video_stop_time.value = 0
+        metrics.move_pan.value = 0
+        metrics.move_tilt.value = 0
+        metrics.motor_stopped.clear()
+
+        # some firmware never reports IDLE after a preset move, and waiting
+        # forever would stall the autotracker for every camera
+        deadline = metrics.start_time.value + AUTOTRACKING_RETURN_TIMEOUT
+
+        while not metrics.motor_stopped.is_set():
+            if time.time() > deadline:
+                logger.warning(
+                    f"{camera}: camera did not report that it reached the return preset"
+                )
+                metrics.stop_time.value = time.time()
+                metrics.motor_stopped.set()
+                break
+
+            await self.onvif.get_camera_status(camera)
+
+            if not metrics.motor_stopped.is_set():
+                await asyncio.sleep(0.1)
+
     async def _calibrate_camera(self, camera):
         # move the camera from the preset in steps and measure the time it takes to move that amount
         # this will allow us to predict movement times with a simple linear regression
@@ -462,14 +749,9 @@ class PtzAutoTracker(threading.Thread):
             self.ptz_metrics[camera].max_zoom.value = 1
             self.ptz_metrics[camera].min_zoom.value = 0
 
-        await self.onvif._move_to_preset(
-            camera,
-            self.config.cameras[camera].onvif.autotracking.return_preset.lower(),
-        )
+        await self._return_to_preset(camera)
         self.ptz_metrics[camera].reset.set()
-        self.ptz_metrics[camera].motor_stopped.clear()
-
-        await self._wait_until_stopped(camera)
+        await self._wait_until_video_settled(camera)
 
         for step in range(num_steps):
             pan = step_sizes[step]
@@ -490,14 +772,17 @@ class PtzAutoTracker(threading.Thread):
                 }
             )
 
-            await self.onvif._move_to_preset(
-                camera,
-                self.config.cameras[camera].onvif.autotracking.return_preset.lower(),
-            )
-            self.ptz_metrics[camera].reset.set()
-            self.ptz_metrics[camera].motor_stopped.clear()
+            # let the camera process see the move and the return end in the
+            # video, which measures the stream latency. the first step does
+            # not move
+            if pan != 0 or tilt != 0:
+                await self._wait_until_video_settled(camera)
 
-            await self._wait_until_stopped(camera)
+            await self._return_to_preset(camera)
+            self.ptz_metrics[camera].reset.set()
+
+            if pan != 0 or tilt != 0:
+                await self._wait_until_video_settled(camera)
 
             logger.info(
                 f"Calibration for {camera} in progress: {round((step / num_steps) * 100)}% complete"
@@ -506,6 +791,11 @@ class PtzAutoTracker(threading.Thread):
         self.calibrating[camera] = False
 
         logger.info(f"Calibration for {camera} complete")
+
+        if (latency := self.ptz_metrics[camera].stream_latency.value) >= 0:
+            logger.info(
+                f"Calibration for {camera} measured a stream latency of {latency:.2f}s"
+            )
 
         # calculate and save new intercept and coefficients
         self._calculate_move_coefficients(camera, True)
@@ -731,14 +1021,16 @@ class PtzAutoTracker(threading.Thread):
             async with self.move_queue_locks[camera]:
                 frame_time, pan, tilt, zoom = move_data
 
-                # if we're receiving move requests during a PTZ move, ignore them
-                if ptz_moving_at_frame_time(
+                # ignore move requests from frames captured before the last
+                # PTZ move finished, the object has moved in the frame since
+                if not frame_captured_after_ptz_move(
                     frame_time,
                     metrics.start_time.value,
                     metrics.stop_time.value,
+                    metrics.video_stop_time.value,
                 ):
                     logger.debug(
-                        f"{camera}: Move queue: PTZ moving, dequeueing move request - frame time: {frame_time}, final pan: {pan}, final tilt: {tilt}, final zoom: {zoom}"
+                        f"{camera}: Move queue: frame captured before the last PTZ move finished, dequeueing move request - frame time: {frame_time}, final pan: {pan}, final tilt: {tilt}, final zoom: {zoom}"
                     )
                     continue
 
@@ -797,8 +1089,12 @@ class PtzAutoTracker(threading.Thread):
 
         if (
             (pan != 0 or tilt != 0 or zoom != 0)
-            and frame_time > self.ptz_metrics[camera].start_time.value
-            and frame_time > self.ptz_metrics[camera].stop_time.value
+            and frame_captured_after_ptz_move(
+                frame_time,
+                self.ptz_metrics[camera].start_time.value,
+                self.ptz_metrics[camera].stop_time.value,
+                self.ptz_metrics[camera].video_stop_time.value,
+            )
             and not self.move_queue_locks[camera].locked()
         ):
             logger.debug(
@@ -1313,10 +1609,11 @@ class PtzAutoTracker(threading.Thread):
                 self.tracked_object_history[camera].append(copy.deepcopy(obj.obj_data))
                 self._calculate_tracked_object_metrics(camera, obj)
 
-                if not ptz_moving_at_frame_time(
+                if frame_captured_after_ptz_move(
                     obj.obj_data["frame_time"],
                     self.ptz_metrics[camera].start_time.value,
                     self.ptz_metrics[camera].stop_time.value,
+                    self.ptz_metrics[camera].video_stop_time.value,
                 ):
                     if self.tracked_object_metrics[camera]["below_distance_threshold"]:
                         logger.debug(
@@ -1417,13 +1714,8 @@ class PtzAutoTracker(threading.Thread):
             logger.debug(
                 f"{camera}: Time is {self.ptz_metrics[camera].frame_time.value}, returning to preset: {autotracker_config.return_preset}"
             )
-            await self.onvif._move_to_preset(
-                camera,
-                autotracker_config.return_preset.lower(),
-            )
-
-            # update stored zoom level from preset
-            await self._wait_until_stopped(camera)
+            # also updates the stored zoom level from the preset
+            await self._return_to_preset(camera)
 
             self.dispatcher.publish(
                 f"{camera}/ptz_autotracker/active", "OFF", retain=False

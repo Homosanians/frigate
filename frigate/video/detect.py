@@ -363,6 +363,7 @@ def process_frames(
                     frame_time,
                     ptz_metrics.start_time.value,
                     ptz_metrics.stop_time.value,
+                    ptz_metrics.video_stop_time.value,
                 )
             )
 

@@ -68,6 +68,7 @@ Navigate to <NavPath path="Settings > Camera configuration > ONVIF" /> for the d
 | **Required Zones**      | Zones an object must enter to begin autotracking                                                                                     |
 | **Return Preset**       | Name of ONVIF preset in camera firmware to return to when tracking ends (default: home)                                              |
 | **Return timeout**      | Seconds to delay before returning to preset (default: 10)                                                                            |
+| **Stream latency**      | Advanced. Seconds the video keeps showing a move after the camera reports it finished. Leave empty to measure it automatically       |
 
 </TabItem>
 <TabItem value="yaml">
@@ -125,6 +126,10 @@ cameras:
         return_preset: home
         # Optional: Seconds to delay before returning to preset. (default: shown below)
         timeout: 10
+        # Optional: Seconds the video keeps showing a PTZ move after the camera reports it finished. (default: shown below)
+        # By default Frigate measures this after every move by watching for the video to stop moving.
+        # Only set it if the measurement is unreliable for your camera.
+        stream_latency: None
         # Optional: Values generated automatically by a camera calibration. Do not modify these manually. (default: shown below)
         movement_weights: []
 ```
@@ -144,7 +149,7 @@ After calibration has ended, your PTZ will be moved to the preset specified by `
 
 :::note
 
-Frigate's web UI and all other cameras will be unresponsive while calibration is in progress. This is expected and normal to avoid excessive network traffic or CPU usage during calibration. Calibration for most PTZs will take about two minutes. The Frigate log will show calibration progress and any errors.
+Frigate's web UI and all other cameras will be unresponsive while calibration is in progress. This is expected and normal to avoid excessive network traffic or CPU usage during calibration. Calibration for most PTZs will take about two minutes, plus about a minute for every second of stream latency, since Frigate waits for each move to show in the video. The Frigate log will show calibration progress and any errors.
 
 :::
 
@@ -261,6 +266,24 @@ There are many reasons this could be the case. If you are using experimental zoo
 Your camera's shutter speed may also be set too low so that blurring occurs with motion. Check your camera's firmware to see if you can increase the shutter speed.
 
 Watching Frigate's debug view can help to determine a possible cause. The autotracked object will have a thicker colored box around it. If the camera consistently zooms in on the object and then loses it, see [Autotracking is erratic, moves the camera in the wrong direction, or zooms past my object. Why?](#autotracking-is-erratic-or-moves-the-camera-in-the-wrong-direction) above.
+
+</FaqItem>
+
+<FaqItem id="the-camera-swings-past-my-object-or-loses-it-right-after-moving-why" question="The camera swings past my object or loses it right after moving. Why?">
+
+Frames from a camera always reach Frigate some time after the camera captured them. After a PTZ move, the camera reports that it has stopped while the frames Frigate is receiving still show it moving, or still show the scene from before the move. Moving again based on those frames would repeat the same correction and swing the camera past the object, and objects in them appear to jump, so tracking is lost.
+
+Frigate watches the video after every move and waits until it has stopped moving before it moves the camera again. How long that takes after the camera reports the move finished is logged at debug level for `frigate.ptz.autotrack`, and calibration logs it at info level when it finishes:
+
+```
+ptz: video settled 0.65s after PTZ stop and showed 98% of the commanded move, measured stream latency 0.64s
+```
+
+The higher this value, the slower autotracking reacts, so a detect stream with low latency helps. You can compare a clock in view of the camera with the [debug view](/usage/live#the-single-camera-view) to check it. A value well above the stream latency usually means the camera reports that a move finished before it actually did.
+
+The share of the commanded move should be close to 100%. A camera that moves much less or much more than Frigate asks for does not follow the ONVIF field of view units, and autotracking will undershoot or overshoot with it.
+
+If Frigate can't see the camera motion in your scene, for example in a view without enough detail, the log shows `video did not show the PTZ move` instead. Set `stream_latency` to a fixed number of seconds in that case.
 
 </FaqItem>
 

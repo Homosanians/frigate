@@ -49,6 +49,10 @@ class PTZMetrics:
     zoom_level: Synchronized
     max_zoom: Synchronized
     min_zoom: Synchronized
+    video_stop_time: Synchronized
+    stream_latency: Synchronized
+    move_pan: Synchronized
+    move_tilt: Synchronized
 
     motor_stopped: Event
     reset: Event
@@ -60,6 +64,16 @@ class PTZMetrics:
         self.zoom_level = mp.Value("d", 0)  # type: ignore[assignment]
         self.max_zoom = mp.Value("d", 0)  # type: ignore[assignment]
         self.min_zoom = mp.Value("d", 0)  # type: ignore[assignment]
+        # receive time of the last frame that still showed the latest move, 0
+        # until the video settles. frames trail the camera by the stream latency
+        self.video_stop_time = mp.Value("d", 0)  # type: ignore[assignment]
+        # measured seconds the video keeps moving after the camera reports a
+        # move finished, -1 until measured
+        self.stream_latency = mp.Value("d", -1)  # type: ignore[assignment]
+        # pan and tilt of the latest relative move in ONVIF FOV units, so the
+        # video can be checked for it. 0 for moves of unknown size
+        self.move_pan = mp.Value("d", 0)  # type: ignore[assignment]
+        self.move_tilt = mp.Value("d", 0)  # type: ignore[assignment]
 
         self.motor_stopped = mp.Event()
         self.reset = mp.Event()

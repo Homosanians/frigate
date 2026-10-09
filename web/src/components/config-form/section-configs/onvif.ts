@@ -22,7 +22,11 @@ const onvif: SectionConfigOverrides = {
       "autotracking.enabled_in_config",
       "autotracking.movement_weights",
     ],
-    advancedFields: ["tls_insecure", "ignore_time_mismatch"],
+    advancedFields: [
+      "tls_insecure",
+      "ignore_time_mismatch",
+      "autotracking.stream_latency",
+    ],
     overrideFields: [],
     restartRequired: ["autotracking.calibrate_on_startup"],
     fieldMessages: [
@@ -62,6 +66,9 @@ const onvif: SectionConfigOverrides = {
         return_preset: {
           "ui:options": { size: "sm" },
           "ui:widget": "ptzPresets",
+        },
+        stream_latency: {
+          "ui:options": { size: "xs" },
         },
         track: {
           "ui:widget": "objectLabels",

@@ -177,6 +177,20 @@ AUTOTRACKING_MAX_MOVE_METRICS = 500
 AUTOTRACKING_ZOOM_OUT_HYSTERESIS = 1.1
 AUTOTRACKING_ZOOM_IN_HYSTERESIS = 0.95
 AUTOTRACKING_ZOOM_EDGE_THRESHOLD = 0.05
+# how much further the frame has to get from where a PTZ move started, as a
+# fraction of the frame width, to count as still moving, and for how many
+# seconds it has to stop doing so to count as settled
+AUTOTRACKING_SETTLE_MOTION_STEP = 0.003
+AUTOTRACKING_SETTLE_QUIET = 0.15
+# share of a commanded move the video has to show before it counts as seen,
+# and the least it has to show as a fraction of the frame width
+AUTOTRACKING_SETTLE_MOVE_FRACTION = 0.2
+AUTOTRACKING_SETTLE_MIN_MOVE = 0.02
+# seconds after a move stops to stop waiting for the video to show it
+AUTOTRACKING_SETTLE_TIMEOUT = 4.0
+AUTOTRACKING_SETTLE_HISTORY = 15
+# seconds to wait for the camera to report a preset return finished
+AUTOTRACKING_RETURN_TIMEOUT = 10.0
 
 # Auth
 
