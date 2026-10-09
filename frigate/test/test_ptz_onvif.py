@@ -236,6 +236,18 @@ class TestMoveTimestamps(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(metrics.start_time.value, 1000.15)
 
+    async def test_failed_move_does_not_leave_the_camera_busy(self) -> None:
+        # otherwise every later move is refused as already in progress
+        controller = _make_move_controller(autotracking_enabled=True)
+        controller.cams[CAMERA]["ptz"].RelativeMove = AsyncMock(
+            side_effect=ConnectionError("camera unreachable")
+        )
+
+        with self.assertRaises(ConnectionError):
+            await controller._move_relative(CAMERA, 0.25, 0, 0, 1)
+
+        self.assertFalse(controller.cams[CAMERA]["active"])
+
     async def test_move_clears_the_previous_video_stop(self) -> None:
         # the camera process sets it again once the video shows this move ended
         controller = _make_move_controller(autotracking_enabled=True)

@@ -189,8 +189,8 @@ AUTOTRACKING_SETTLE_MIN_MOVE = 0.02
 # seconds after a move stops to stop waiting for the video to show it
 AUTOTRACKING_SETTLE_TIMEOUT = 4.0
 AUTOTRACKING_SETTLE_HISTORY = 15
-# seconds to wait for the camera to report a preset return finished
-AUTOTRACKING_RETURN_TIMEOUT = 10.0
+# seconds to wait for the camera to report that a move finished
+AUTOTRACKING_STOP_TIMEOUT = 15.0
 
 # Auth
 

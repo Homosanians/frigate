@@ -30,13 +30,13 @@ from frigate.const import (
     AUTOTRACKING_MAX_MOVE_METRICS,
     AUTOTRACKING_MOTION_MAX_POINTS,
     AUTOTRACKING_MOTION_MIN_DISTANCE,
-    AUTOTRACKING_RETURN_TIMEOUT,
     AUTOTRACKING_SETTLE_HISTORY,
     AUTOTRACKING_SETTLE_MIN_MOVE,
     AUTOTRACKING_SETTLE_MOTION_STEP,
     AUTOTRACKING_SETTLE_MOVE_FRACTION,
     AUTOTRACKING_SETTLE_QUIET,
     AUTOTRACKING_SETTLE_TIMEOUT,
+    AUTOTRACKING_STOP_TIMEOUT,
     AUTOTRACKING_ZOOM_EDGE_THRESHOLD,
     AUTOTRACKING_ZOOM_IN_HYSTERESIS,
     AUTOTRACKING_ZOOM_OUT_HYSTERESIS,
@@ -490,8 +490,12 @@ class PtzAutoTracker(threading.Thread):
                     future = asyncio.run_coroutine_threadsafe(
                         self.camera_maintenance(camera), self.onvif.loop
                     )
-                    # Wait for the coroutine to complete
-                    future.result()
+                    # Wait for the coroutine to complete. One camera failing
+                    # must not end autotracking for every camera
+                    try:
+                        future.result()
+                    except Exception as e:
+                        logger.warning(f"{camera}: Autotracker maintenance failed: {e}")
                 else:
                     # disabled dynamically by mqtt
                     if self.tracked_object.get(camera):
@@ -556,7 +560,12 @@ class PtzAutoTracker(threading.Thread):
                 ) = map(float, camera_config.onvif.autotracking.movement_weights)
 
             if camera_config.onvif.autotracking.calibrate_on_startup:
-                await self._calibrate_camera(camera)
+                try:
+                    await self._calibrate_camera(camera)
+                except Exception as e:
+                    logger.warning(f"Calibration for {camera} failed: {e}")
+                finally:
+                    self.calibrating[camera] = False
 
         self.dispatcher.publish(f"{camera}/ptz_autotracker/active", "OFF", retain=False)
         self.autotracker_init[camera] = True
@@ -577,11 +586,32 @@ class PtzAutoTracker(threading.Thread):
 
     async def _wait_until_stopped(
         self, camera: str, metrics: PTZMetrics | None = None
-    ) -> None:
+    ) -> bool:
+        """Wait for the camera to report that the motor stopped.
+
+        Gives up after a while, for example when the camera can't be reached
+        or something else keeps it moving, and returns False. The move is then
+        treated as finished so autotracking does not stall.
+        """
         metrics = metrics or self.ptz_metrics[camera]
+        deadline = time.time() + AUTOTRACKING_STOP_TIMEOUT
 
         while not metrics.motor_stopped.is_set():
+            if time.time() > deadline:
+                logger.warning(
+                    f"{camera}: camera did not report that it stopped moving within {AUTOTRACKING_STOP_TIMEOUT:.0f}s"
+                )
+                metrics.stop_time.value = time.time()
+                metrics.motor_stopped.set()
+                return False
+
             await self.onvif.get_camera_status(camera)
+
+            # don't hammer a camera that fails right away
+            if not metrics.motor_stopped.is_set():
+                await asyncio.sleep(0.05)
+
+        return True
 
     async def _wait_until_video_settled(self, camera: str) -> None:
         """Wait for the camera process to see the latest move end in the video."""
@@ -601,11 +631,12 @@ class PtzAutoTracker(threading.Thread):
         ):
             await asyncio.sleep(0.1)
 
-    async def _return_to_preset(self, camera: str) -> None:
+    async def _return_to_preset(self, camera: str) -> bool:
         """Move to the return preset and wait for the motor to stop.
 
         The return is timed like any other move, so frames that still show it
         are not used to start tracking. How far the preset is is unknown.
+        Returns False if the camera did not report that it stopped.
         """
         metrics = self.ptz_metrics[camera]
 
@@ -621,23 +652,7 @@ class PtzAutoTracker(threading.Thread):
         metrics.move_tilt.value = 0
         metrics.motor_stopped.clear()
 
-        # some firmware never reports IDLE after a preset move, and waiting
-        # forever would stall the autotracker for every camera
-        deadline = metrics.start_time.value + AUTOTRACKING_RETURN_TIMEOUT
-
-        while not metrics.motor_stopped.is_set():
-            if time.time() > deadline:
-                logger.warning(
-                    f"{camera}: camera did not report that it reached the return preset"
-                )
-                metrics.stop_time.value = time.time()
-                metrics.motor_stopped.set()
-                break
-
-            await self.onvif.get_camera_status(camera)
-
-            if not metrics.motor_stopped.is_set():
-                await asyncio.sleep(0.1)
+        return await self._wait_until_stopped(camera, metrics)
 
     async def _calibrate_camera(self, camera):
         # move the camera from the preset in steps and measure the time it takes to move that amount
@@ -756,7 +771,9 @@ class PtzAutoTracker(threading.Thread):
             self.ptz_metrics[camera].max_zoom.value = 1
             self.ptz_metrics[camera].min_zoom.value = 0
 
-        await self._return_to_preset(camera)
+        if not await self._return_to_preset(camera):
+            return self._calibration_failed(camera)
+
         self.ptz_metrics[camera].reset.set()
         await self._wait_until_video_settled(camera)
 
@@ -767,7 +784,11 @@ class PtzAutoTracker(threading.Thread):
             start_time = time.time()
             await self.onvif._move_relative(camera, pan, tilt, 0, 1)
 
-            await self._wait_until_stopped(camera)
+            # a move the camera doesn't report finishing has no usable duration
+            if not await self._wait_until_stopped(camera):
+                await self._return_to_preset(camera)
+                return self._calibration_failed(camera)
+
             stop_time = time.time()
 
             self.move_metrics[camera].append(
@@ -785,7 +806,9 @@ class PtzAutoTracker(threading.Thread):
             if pan != 0 or tilt != 0:
                 await self._wait_until_video_settled(camera)
 
-            await self._return_to_preset(camera)
+            if not await self._return_to_preset(camera):
+                return self._calibration_failed(camera)
+
             self.ptz_metrics[camera].reset.set()
 
             if pan != 0 or tilt != 0:
@@ -806,6 +829,14 @@ class PtzAutoTracker(threading.Thread):
 
         # calculate and save new intercept and coefficients
         self._calculate_move_coefficients(camera, True)
+
+    def _calibration_failed(self, camera: str) -> None:
+        # calibration holds up Frigate's startup, so it gives up on a camera
+        # that doesn't report stopping rather than keep waiting on it
+        logger.warning(
+            f"Calibration for {camera} failed: the camera did not report that it stopped moving. See the Frigate documentation."
+        )
+        self.calibrating[camera] = False
 
     def _calculate_move_coefficients(self, camera, calibration=False):
         # calculate new coefficients when we have 50 more new values. Save up to 500
@@ -1042,21 +1073,21 @@ class PtzAutoTracker(threading.Thread):
                     continue
 
                 else:
-                    if (
-                        camera_config.onvif.autotracking.zooming
-                        == ZoomingModeEnum.relative
-                    ):
-                        await self.onvif._move_relative(camera, pan, tilt, zoom, 1)
-                    else:
-                        if pan != 0 or tilt != 0:
-                            await self.onvif._move_relative(camera, pan, tilt, 0, 1)
+                    try:
+                        stopped = await self._send_move(
+                            camera, camera_config, metrics, pan, tilt, zoom
+                        )
+                    except Exception as e:
+                        # a camera that can't be reached for a moment must not
+                        # end autotracking for good
+                        logger.warning(f"{camera}: Autotracking move failed: {e}")
+                        metrics.stop_time.value = time.time()
+                        metrics.motor_stopped.set()
+                        continue
 
-                            await self._wait_until_stopped(camera, metrics)
-
-                        if zoom > 0 and metrics.zoom_level.value != zoom:
-                            await self.onvif._zoom_absolute(camera, zoom, 1)
-
-                    await self._wait_until_stopped(camera, metrics)
+                    # the timing of a move that never reported stopping is unusable
+                    if not stopped:
+                        continue
 
                     if camera_config.onvif.autotracking.movement_weights:
                         logger.debug(
@@ -1090,6 +1121,34 @@ class PtzAutoTracker(threading.Thread):
         # Clean up the queue on exit
         while not move_queue.empty():
             await move_queue.get()
+
+    async def _send_move(
+        self,
+        camera: str,
+        camera_config: CameraConfig,
+        metrics: PTZMetrics,
+        pan: float,
+        tilt: float,
+        zoom: float,
+    ) -> bool:
+        """Send a queued move and wait for it to finish.
+
+        Returns False if the camera did not report that it stopped.
+        """
+        stopped = True
+
+        if camera_config.onvif.autotracking.zooming == ZoomingModeEnum.relative:
+            await self.onvif._move_relative(camera, pan, tilt, zoom, 1)
+        else:
+            if pan != 0 or tilt != 0:
+                await self.onvif._move_relative(camera, pan, tilt, 0, 1)
+
+                stopped = await self._wait_until_stopped(camera, metrics)
+
+            if zoom > 0 and metrics.zoom_level.value != zoom:
+                await self.onvif._zoom_absolute(camera, zoom, 1)
+
+        return await self._wait_until_stopped(camera, metrics) and stopped
 
     def _enqueue_move(self, camera, frame_time, pan, tilt, zoom):
         pan, tilt, zoom = (np.clip(value, -1, 1) for value in (pan, tilt, zoom))
@@ -1722,7 +1781,13 @@ class PtzAutoTracker(threading.Thread):
                 f"{camera}: Time is {self.ptz_metrics[camera].frame_time.value}, returning to preset: {autotracker_config.return_preset}"
             )
             # also updates the stored zoom level from the preset
-            await self._return_to_preset(camera)
+            try:
+                await self._return_to_preset(camera)
+            except Exception as e:
+                logger.warning(f"{camera}: Returning to preset failed: {e}")
+                metrics = self.ptz_metrics[camera]
+                metrics.stop_time.value = time.time()
+                metrics.motor_stopped.set()
 
             self.dispatcher.publish(
                 f"{camera}/ptz_autotracker/active", "OFF", retain=False

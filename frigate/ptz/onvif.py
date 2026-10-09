@@ -654,16 +654,17 @@ class OnvifController:
 
         move_request.Speed = move_speed
 
-        await cam["ptz"].RelativeMove(move_request)
+        try:
+            await cam["ptz"].RelativeMove(move_request)
+        finally:
+            # reset after the move request, even if the camera can't be reached
+            move_request.Translation.PanTilt.x = 0
+            move_request.Translation.PanTilt.y = 0
 
-        # reset after the move request
-        move_request.Translation.PanTilt.x = 0
-        move_request.Translation.PanTilt.y = 0
+            if include_zoom:
+                del move_request["Translation"]["Zoom"]
 
-        if include_zoom:
-            del move_request["Translation"]["Zoom"]
-
-        cam["active"] = False
+            cam["active"] = False
 
     async def _move_to_preset(self, camera_name: str, preset: str) -> None:
         cam = self.cams[camera_name]
@@ -687,14 +688,15 @@ class OnvifController:
         move_request = cam["move_request"]
         preset_token = cam["presets"][preset]
 
-        await cam["ptz"].GotoPreset(
-            {
-                "ProfileToken": move_request.ProfileToken,
-                "PresetToken": preset_token,
-            }
-        )
-
-        cam["active"] = False
+        try:
+            await cam["ptz"].GotoPreset(
+                {
+                    "ProfileToken": move_request.ProfileToken,
+                    "PresetToken": preset_token,
+                }
+            )
+        finally:
+            cam["active"] = False
 
     async def _goto_home(self, camera_name: str) -> None:
         cam = self.cams[camera_name]
@@ -712,11 +714,12 @@ class OnvifController:
         metrics.move_pan.value = 0
         metrics.move_tilt.value = 0
 
-        await cam["ptz"].GotoHomePosition(
-            {"ProfileToken": cam["move_request"].ProfileToken}
-        )
-
-        cam["active"] = False
+        try:
+            await cam["ptz"].GotoHomePosition(
+                {"ProfileToken": cam["move_request"].ProfileToken}
+            )
+        finally:
+            cam["active"] = False
 
     async def _load_presets(self, camera_name: str) -> None:
         """Refresh the cached presets from the camera."""
@@ -890,15 +893,16 @@ class OnvifController:
 
         logger.debug(f"{camera_name}: Absolute zoom: {zoom}")
 
-        await cam["ptz"].AbsoluteMove(
-            {
-                "ProfileToken": cam["move_request"].ProfileToken,
-                "Position": {"Zoom": zoom},
-                "Speed": {"Zoom": speed},
-            }
-        )
-
-        cam["active"] = False
+        try:
+            await cam["ptz"].AbsoluteMove(
+                {
+                    "ProfileToken": cam["move_request"].ProfileToken,
+                    "Position": {"Zoom": zoom},
+                    "Speed": {"Zoom": speed},
+                }
+            )
+        finally:
+            cam["active"] = False
 
     async def _focus(self, camera_name: str, command: OnvifCommandEnum) -> None:
         cam = self.cams[camera_name]

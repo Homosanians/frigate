@@ -226,9 +226,11 @@ Some cameras have firmware that reports that FOV RelativeMove, the ONVIF command
 
 ### Calibration Issues
 
-<FaqItem id="i-tried-calibrating-my-camera-but-the-logs-show-that-it-is-stuck-at-0-and-frigate-is-not-starting-up" question="I tried calibrating my camera, but the logs show that it is stuck at 0% and Frigate is not starting up.">
+<FaqItem id="calibration-fails-saying-the-camera-did-not-report-that-it-stopped-moving-why" question="Calibration fails, saying the camera did not report that it stopped moving. Why?">
 
-This is often caused by the same reason as the "MOVING" status error above - the `MoveStatus` ONVIF parameter is not changing due to a bug in your camera's firmware. Also, see the note above: Frigate's web UI and all other cameras will be unresponsive while calibration is in progress. This is expected and normal. But if you don't see log entries every few seconds for calibration progress, your camera is not compatible with autotracking.
+Frigate waits up to 15 seconds for the camera to report that each calibration move finished. If it doesn't, calibration stops, the log shows `Calibration for <camera> failed: the camera did not report that it stopped moving`, and Frigate continues starting up without new `movement_weights`.
+
+This is often caused by the same reason as the "MOVING" status error above: the `MoveStatus` ONVIF parameter is not changing due to a bug in your camera's firmware. It also happens when something else moves the camera during calibration, such as a tour, scan or idle motion set up in the camera's firmware, or another NVR. Also, see the note above: Frigate's web UI and all other cameras will be unresponsive while calibration is in progress. This is expected and normal.
 
 </FaqItem>
 

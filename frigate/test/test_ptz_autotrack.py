@@ -531,6 +531,99 @@ class TestWaitUntilVideoSettled(unittest.IsolatedAsyncioTestCase):
         sleep.assert_awaited()
 
 
+def _ticking_clock(start: float = 1000.0):
+    """time.time() that moves one second per call, so wait loops end."""
+    clock = iter(range(int(start), int(start) + 100000))
+    return lambda: float(next(clock))
+
+
+class TestCameraThatStopsAnswering(unittest.IsolatedAsyncioTestCase):
+    """The network to a camera can drop at any time, and some cameras never
+    report IDLE. Neither may stall or end autotracking."""
+
+    async def test_wait_for_stop_gives_up(self) -> None:
+        tracker = _make_tracker()
+        metrics = tracker.ptz_metrics[CAMERA]
+        metrics.motor_stopped.clear()
+        tracker.onvif.get_camera_status = AsyncMock()
+
+        with (
+            patch("frigate.ptz.autotrack.time.time", side_effect=_ticking_clock()),
+            patch("frigate.ptz.autotrack.asyncio.sleep", new=AsyncMock()),
+        ):
+            stopped = await tracker._wait_until_stopped(CAMERA)
+
+        self.assertFalse(stopped)
+        self.assertTrue(metrics.motor_stopped.is_set())
+        self.assertGreater(metrics.stop_time.value, 0)
+        self.assertLess(tracker.onvif.get_camera_status.await_count, 30)
+
+    async def test_move_queue_survives_a_failed_move(self) -> None:
+        tracker = _make_tracker()
+        tracker.stop_event = threading.Event()
+        tracker.move_queues = {CAMERA: asyncio.Queue()}
+        tracker.move_queue_locks = {CAMERA: asyncio.Lock()}
+        tracker.intercept = {CAMERA: None}
+        tracker.move_metrics = {CAMERA: []}
+        tracker.onvif._move_relative = AsyncMock(
+            side_effect=[ConnectionError("camera unreachable"), None]
+        )
+        tracker.move_queues[CAMERA].put_nowait((2000.0, 0.3, 0.0, 0.0))
+        tracker.move_queues[CAMERA].put_nowait((2001.0, 0.3, 0.0, 0.0))
+
+        task = asyncio.create_task(tracker._process_move_queue(CAMERA))
+        await asyncio.sleep(0.3)
+        tracker.stop_event.set()
+        await task
+
+        self.assertEqual(tracker.onvif._move_relative.await_count, 2)
+
+    async def test_maintenance_survives_a_failed_return(self) -> None:
+        tracker = _make_tracker()
+        metrics = tracker.ptz_metrics[CAMERA]
+        tracker.autotracker_init[CAMERA] = True
+        tracker.calibrating[CAMERA] = False
+        tracker.tracked_object[CAMERA] = None
+        tracker.tracked_object_history = {CAMERA: [{"frame_time": 1000.0}]}
+        metrics.frame_time.value = 1100.0
+        tracker.onvif._move_to_preset = AsyncMock(
+            side_effect=ConnectionError("camera unreachable")
+        )
+
+        await tracker.camera_maintenance(CAMERA)
+
+        self.assertTrue(metrics.motor_stopped.is_set())
+
+    async def test_calibration_gives_up_on_a_camera_that_never_stops(self) -> None:
+        # calibration runs before Frigate starts its API, so it must end
+        tracker = _make_tracker()
+        tracker.calibrating = {CAMERA: False}
+        tracker.move_metrics = {CAMERA: []}
+        tracker.intercept = {CAMERA: None}
+        tracker.move_coefficients = {CAMERA: []}
+        tracker.zoom_time = {CAMERA: 0}
+        metrics = tracker.ptz_metrics[CAMERA]
+        # like OnvifController, a move clears motor_stopped until IDLE is reported
+        tracker.onvif._move_relative = AsyncMock(
+            side_effect=lambda *args: metrics.motor_stopped.clear()
+        )
+        tracker.onvif._move_to_preset = AsyncMock()
+        tracker.onvif.get_camera_status = AsyncMock()
+
+        with (
+            patch("frigate.ptz.autotrack.time.time", side_effect=_ticking_clock()),
+            patch("frigate.ptz.autotrack.asyncio.sleep", new=AsyncMock()),
+            patch("frigate.ptz.autotrack.update_yaml_file_bulk") as save_weights,
+        ):
+            await tracker._calibrate_camera(CAMERA)
+
+        self.assertFalse(tracker.calibrating[CAMERA])
+        save_weights.assert_not_called()
+        self.assertEqual(
+            tracker.config.cameras[CAMERA].onvif.autotracking.movement_weights, []
+        )
+
+
 class TestReturnToPreset(unittest.IsolatedAsyncioTestCase):
     async def test_return_is_timed_like_a_move(self) -> None:
         # the video keeps showing the return after the camera reports it done,
