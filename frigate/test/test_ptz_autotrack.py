@@ -12,8 +12,11 @@ KeyError on the autotracker thread or silently keep the wrong state:
 """
 
 import asyncio
+import json
 import threading
+import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -31,6 +34,7 @@ from frigate.ptz.autotrack import (
     frame_shift,
     ptz_moving_at_frame_time,
 )
+from frigate.ptz.event_log import PtzEventLog, PtzSource
 
 CAMERA = "ptz_cam"
 
@@ -601,7 +605,7 @@ class TestCameraThatStopsAnswering(unittest.IsolatedAsyncioTestCase):
         metrics.motor_stopped.clear()
         polls = [0]
 
-        async def status(camera):
+        async def status(camera, source=None):
             polls[0] += 1
             if polls[0] >= 200:
                 metrics.motor_stopped.set()
@@ -641,12 +645,12 @@ class TestCalibrationWithASlowCamera(unittest.IsolatedAsyncioTestCase):
             now[0] += 1
             return now[0]
 
-        def move(*args):
+        def move(*args, **kwargs):
             metrics.motor_stopped.clear()
             moved_at[0] = now[0]
             return True
 
-        async def status(camera):
+        async def status(camera, source=None):
             if now[0] - moved_at[0] >= idle_after:
                 metrics.motor_stopped.set()
 
@@ -759,7 +763,7 @@ class TestReturnToPreset(unittest.IsolatedAsyncioTestCase):
         metrics.move_pan.value = 0.3
         tracker.onvif._move_to_preset = AsyncMock()
 
-        async def report_idle(camera):
+        async def report_idle(camera, source=None):
             metrics.stop_time.value = 1001.0
             metrics.motor_stopped.set()
 
@@ -768,7 +772,9 @@ class TestReturnToPreset(unittest.IsolatedAsyncioTestCase):
         with patch("frigate.ptz.autotrack.time.time", return_value=1000.0):
             await tracker._return_to_preset(CAMERA)
 
-        tracker.onvif._move_to_preset.assert_awaited_once_with(CAMERA, "home")
+        tracker.onvif._move_to_preset.assert_awaited_once_with(
+            CAMERA, "home", source=PtzSource.autotrack
+        )
         self.assertEqual(metrics.start_time.value, 1000.0)
         self.assertEqual(metrics.stop_time.value, 1001.0)
         self.assertEqual(metrics.video_stop_time.value, 0.0)
@@ -839,6 +845,215 @@ class TestMaxTargetBox(unittest.TestCase):
     def test_follows_zoom_factor(self) -> None:
         self.assertAlmostEqual(calculate_max_target_box(0.5), 0.6**2)
         self.assertAlmostEqual(calculate_max_target_box(0.25), 0.6**4)
+
+
+def _watched_tracker() -> tuple[PtzAutoTracker, PtzEventLog]:
+    tracker = _make_tracker()
+    tracker.event_log = PtzEventLog()
+    tracker.event_log.watch(CAMERA)
+    tracker.seen_video_stop = {}
+    return tracker, tracker.event_log
+
+
+def _autotrack_events(log: PtzEventLog) -> list[dict]:
+    return [e["data"] for e in log.entries(CAMERA, 0)[0] if e["kind"] == "autotrack"]
+
+
+class TestPtzLog(unittest.IsolatedAsyncioTestCase):
+    def test_skipped_moves_say_why(self) -> None:
+        tracker, log = _watched_tracker()
+        metrics = tracker.ptz_metrics[CAMERA]
+        metrics.start_time.value = MOVE_START
+        metrics.stop_time.value = MOVE_STOP
+        metrics.video_stop_time.value = 1001.8
+        tracker.move_queues = {CAMERA: MagicMock()}
+        tracker.move_queue_locks = {CAMERA: MagicMock()}
+        tracker.move_queue_locks[CAMERA].locked.return_value = False
+
+        # both frames were received before the video settled
+        tracker._enqueue_move(CAMERA, 1001.5, 0.3, 0, 0)
+        tracker._enqueue_move(CAMERA, 1001.6, 0.3, 0, 0)
+        tracker.move_queue_locks[CAMERA].locked.return_value = True
+        tracker._enqueue_move(CAMERA, 1002.0, 0.3, 0, 0)
+
+        entries = log.entries(CAMERA, 0)[0]
+        self.assertEqual(
+            [(e["data"]["reason"], e["repeats"]) for e in entries],
+            [("stale_frame", 2), ("queue_busy", 1)],
+        )
+        tracker.onvif.loop.call_soon_threadsafe.assert_not_called()
+
+    def test_decision_shows_the_computed_move(self) -> None:
+        tracker, log = _watched_tracker()
+        tracker.tracked_object_metrics = {
+            CAMERA: {"valid_velocity": True, "velocity": np.zeros((4,))}
+        }
+        tracker._get_zoom_amount = MagicMock(return_value=0)
+        tracker._enqueue_move = MagicMock()
+        obj = SimpleNamespace(
+            obj_data={
+                "id": "abc",
+                "label": "person",
+                "box": (1500, 400, 1700, 800),
+                "centroid": (1600, 600),
+                "frame_time": 1000.0,
+            }
+        )
+
+        tracker._autotrack_move_ptz(CAMERA, obj)
+
+        (decision,) = _autotrack_events(log)
+        self.assertEqual(decision["event"], "decision")
+        self.assertEqual(decision["id"], "abc")
+        self.assertEqual(decision["centroid"], [1600, 600])
+        self.assertFalse(decision["predicted"])
+        self.assertAlmostEqual(decision["pan"], 0.667, places=3)
+        self.assertAlmostEqual(decision["tilt"], -0.111, places=3)
+        json.dumps(decision, allow_nan=False)
+
+    async def test_finished_move_is_logged(self) -> None:
+        tracker, log = _watched_tracker()
+        tracker.stop_event = threading.Event()
+        tracker.move_queues = {CAMERA: asyncio.Queue()}
+        tracker.move_queue_locks = {CAMERA: asyncio.Lock()}
+        tracker.intercept = {CAMERA: None}
+        tracker.move_metrics = {CAMERA: []}
+        metrics = tracker.ptz_metrics[CAMERA]
+
+        async def send_move(*args):
+            metrics.start_time.value = 2000.0
+            metrics.stop_time.value = 2001.25
+            return True
+
+        tracker._send_move = send_move
+        tracker.move_queues[CAMERA].put_nowait((1999.0, 0.3, -0.1, 0.0))
+
+        task = asyncio.create_task(tracker._process_move_queue(CAMERA))
+        await asyncio.sleep(0.05)
+        tracker.stop_event.set()
+        await task
+
+        (done,) = _autotrack_events(log)
+        self.assertEqual(done["event"], "move_done")
+        self.assertTrue(done["stopped"])
+        self.assertEqual(done["actual_time"], 1.25)
+        self.assertIsNone(done["predicted_time"])
+
+    async def test_video_settle_is_logged_once_per_move(self) -> None:
+        tracker, log = _watched_tracker()
+        now = time.time()
+        metrics = tracker.ptz_metrics[CAMERA]
+        metrics.start_time.value = now - 2
+        metrics.stop_time.value = now - 1
+        metrics.video_stop_time.value = now - 0.4
+        metrics.stream_latency.value = 0.6
+
+        await tracker.camera_maintenance(CAMERA)
+        await tracker.camera_maintenance(CAMERA)
+
+        (settled,) = _autotrack_events(log)
+        self.assertEqual(settled["event"], "video_settled")
+        self.assertAlmostEqual(settled["after_stop"], 0.6, places=2)
+        self.assertAlmostEqual(settled["stream_latency"], 0.6, places=2)
+
+    def test_non_finite_numbers_stay_out_of_decisions(self) -> None:
+        # the API cannot serialize NaN or infinity, and one such row would
+        # make every poll of the Debug view fail
+        tracker, log = _watched_tracker()
+        tracker.tracked_object_metrics = {
+            CAMERA: {
+                "valid_velocity": True,
+                "velocity": np.array([np.nan, 1.04, np.inf, 0.0]),
+            }
+        }
+        tracker._get_zoom_amount = MagicMock(return_value=0)
+        tracker._enqueue_move = MagicMock()
+        obj = SimpleNamespace(
+            obj_data={
+                "id": "abc",
+                "label": "person",
+                "box": (1500, 400, 1700, 800),
+                "centroid": (1600, 600),
+                "frame_time": 1000.0,
+            }
+        )
+
+        tracker._autotrack_move_ptz(CAMERA, obj)
+
+        (decision,) = _autotrack_events(log)
+        self.assertEqual(decision["velocity"], [None, 1.0, None, 0.0])
+        json.dumps(decision, allow_nan=False)
+
+    async def test_infinite_stream_latency_stays_out_of_video_settled(self) -> None:
+        tracker, log = _watched_tracker()
+        now = time.time()
+        metrics = tracker.ptz_metrics[CAMERA]
+        metrics.start_time.value = now - 2
+        metrics.stop_time.value = now - 1
+        metrics.video_stop_time.value = now - 0.4
+        metrics.stream_latency.value = float("inf")
+
+        await tracker.camera_maintenance(CAMERA)
+
+        (settled,) = _autotrack_events(log)
+        self.assertIsNone(settled["stream_latency"])
+        json.dumps(settled, allow_nan=False)
+
+    async def _calibrate_with(self, calibrated: bool | None) -> list[dict]:
+        tracker, log = _watched_tracker()
+        tracker.move_metrics = {CAMERA: []}
+        tracker.zoom_time = {CAMERA: 0}
+        tracker.onvif._move_relative = AsyncMock(return_value=True)
+        tracker._return_to_preset = AsyncMock()
+        tracker._wait_until_stopped = AsyncMock()
+        tracker._wait_until_video_settled = AsyncMock()
+        tracker._calculate_move_coefficients = MagicMock(return_value=calibrated)
+
+        await tracker._calibrate_camera(CAMERA)
+
+        return [e for e in log.entries(CAMERA, 0)[0] if e["kind"] == "calibration"]
+
+    async def test_rejected_calibration_is_not_logged_as_finished(self) -> None:
+        # the regression came out implausible, so no weights were saved
+        entries = await self._calibrate_with(False)
+
+        self.assertEqual(
+            entries[-1]["data"], {"event": "failed", "reason": "invalid_coefficients"}
+        )
+        self.assertEqual(entries[-1]["source"], "calibration")
+        self.assertNotIn("finished", [e["data"]["event"] for e in entries])
+
+    async def test_accepted_calibration_is_logged_as_finished(self) -> None:
+        entries = await self._calibrate_with(None)
+
+        self.assertEqual(entries[-1]["data"]["event"], "finished")
+        self.assertNotIn("failed", [e["data"]["event"] for e in entries])
+
+    def test_calibration_entries_are_marked_as_calibration(self) -> None:
+        tracker, log = _watched_tracker()
+        tracker.calibrating[CAMERA] = True
+
+        tracker._log_skip(CAMERA, "centered")
+        tracker._calibration_failed(CAMERA)
+
+        self.assertEqual(
+            [e["source"] for e in log.entries(CAMERA, 0)[0]],
+            ["calibration", "calibration"],
+        )
+
+    def test_nothing_logged_while_the_log_is_closed(self) -> None:
+        tracker = _make_tracker()
+        tracker.event_log = PtzEventLog()
+        tracker.seen_video_stop = {}
+        metrics = tracker.ptz_metrics[CAMERA]
+        metrics.start_time.value = MOVE_START
+        metrics.stop_time.value = MOVE_STOP
+        tracker.move_queues = {CAMERA: MagicMock()}
+        tracker.move_queue_locks = {CAMERA: MagicMock()}
+
+        tracker._enqueue_move(CAMERA, 1000.5, 0.3, 0, 0)
+
+        self.assertEqual(tracker.event_log.entries(CAMERA, 0)[0], [])
 
 
 if __name__ == "__main__":

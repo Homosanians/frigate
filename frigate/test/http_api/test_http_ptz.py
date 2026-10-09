@@ -126,6 +126,51 @@ class TestHttpPtz(BaseTestHttp):
         assert response.status_code == 422
         self.onvif.set_preset.assert_not_awaited()
 
+    def test_debug_log_poll(self):
+        snapshot = {
+            "session": "s1",
+            "connected": True,
+            "capabilities": None,
+            "status": None,
+            "seq": 3,
+            "missed": False,
+            "entries": [],
+        }
+        self.onvif.debug_snapshot = AsyncMock(return_value=snapshot)
+
+        with AuthTestClient(self.app) as client:
+            response = client.get(f"/{CAMERA}/ptz/debug", params={"after": 2})
+
+        assert response.status_code == 200
+        assert response.json() == snapshot
+        self.onvif.debug_snapshot.assert_awaited_once_with(CAMERA, 2)
+
+    def test_viewer_cannot_poll_the_debug_log(self):
+        self.onvif.debug_snapshot = AsyncMock()
+
+        with AuthTestClient(self.app) as client:
+            response = client.get(f"/{CAMERA}/ptz/debug", headers=VIEWER)
+
+        assert response.status_code == 403
+        self.onvif.debug_snapshot.assert_not_awaited()
+
+    def test_debug_log_for_unknown_camera(self):
+        self.onvif.debug_snapshot = AsyncMock()
+
+        with AuthTestClient(self.app) as client:
+            response = client.get("/missing/ptz/debug")
+
+        assert response.status_code in (403, 404)
+        self.onvif.debug_snapshot.assert_not_awaited()
+
+    def test_debug_log_rejects_a_negative_after(self):
+        self.onvif.debug_snapshot = AsyncMock()
+
+        with AuthTestClient(self.app) as client:
+            response = client.get(f"/{CAMERA}/ptz/debug", params={"after": -1})
+
+        assert response.status_code == 422
+
     def test_device_info_returned_as_body(self):
         for headers in ({}, VIEWER):
             with self.subTest(headers=headers):

@@ -31,7 +31,9 @@ import { Trans, useTranslation } from "react-i18next";
 import { useDocDomain } from "@/hooks/use-doc-domain";
 import { getTranslatedLabel } from "@/utils/i18n";
 import { useCameraFriendlyName } from "@/hooks/use-camera-friendly-name";
+import { useIsAdmin } from "@/hooks/use-is-admin";
 import { AudioLevelGraph } from "@/components/audio/AudioLevelGraph";
+import PtzDebugLog from "@/components/ptz/PtzDebugLog";
 import { useWs } from "@/api/ws";
 import { cn } from "@/lib/utils";
 import { getPrimaryModel } from "@/utils/modelUtil";
@@ -44,11 +46,12 @@ type Options = { [key: string]: boolean };
 
 const emptyObject = Object.freeze({});
 
-// full class names so tailwind keeps them
+// Tailwind needs the full class names in the source
 const TAB_GRID_COLUMNS: Record<number, string> = {
   2: "grid-cols-2",
   3: "grid-cols-3",
   4: "grid-cols-4",
+  5: "grid-cols-5",
 };
 
 export default function ObjectSettingsView({
@@ -57,6 +60,8 @@ export default function ObjectSettingsView({
   const { t } = useTranslation(["views/settings"]);
 
   const { getLocaleDocUrl } = useDocDomain();
+
+  const isAdmin = useIsAdmin();
 
   const { data: config } = useSWR<FrigateConfig>("config");
 
@@ -127,9 +132,11 @@ export default function ObjectSettingsView({
   );
 
   const [debugDraw, setDebugDraw] = useState(false);
+  const [tab, setTab] = useState("debug");
 
   useEffect(() => {
     setDebugDraw(false);
+    setTab("debug");
   }, [selectedCamera]);
 
   const cameraConfig = useMemo(() => {
@@ -139,6 +146,8 @@ export default function ObjectSettingsView({
   }, [config, selectedCamera]);
 
   const cameraName = useCameraFriendlyName(cameraConfig);
+  // the PTZ log endpoint is for admins only
+  const hasPtz = isAdmin && !!cameraConfig?.onvif?.host;
 
   const { objects, audio_detections } = useCameraActivity(
     cameraConfig ?? ({} as CameraConfig),
@@ -207,14 +216,15 @@ export default function ObjectSettingsView({
           </div>
         )}
 
-        <Tabs defaultValue="debug" className="w-full">
+        <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList
             className={cn(
               "grid w-full",
               TAB_GRID_COLUMNS[
                 2 +
                   Number(cameraConfig.audio.enabled_in_config) +
-                  Number(showOnvif)
+                  Number(showOnvif) +
+                  Number(hasPtz)
               ],
             )}
           >
@@ -227,6 +237,9 @@ export default function ObjectSettingsView({
             )}
             {showOnvif && (
               <TabsTrigger value="onvif">{t("debug.onvif.title")}</TabsTrigger>
+            )}
+            {hasPtz && (
+              <TabsTrigger value="ptz">{t("debug.ptz.title")}</TabsTrigger>
             )}
           </TabsList>
           <TabsContent value="debug">
@@ -353,6 +366,11 @@ export default function ObjectSettingsView({
           {showOnvif && (
             <TabsContent value="onvif">
               <OnvifDebugInfo cameraName={cameraConfig.name} />
+            </TabsContent>
+          )}
+          {hasPtz && (
+            <TabsContent value="ptz">
+              <PtzDebugLog camera={cameraConfig.name} active={tab === "ptz"} />
             </TabsContent>
           )}
         </Tabs>

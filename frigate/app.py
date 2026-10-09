@@ -78,6 +78,7 @@ from frigate.object_detection.base import ObjectDetectProcess
 from frigate.object_detection.util import detection_frame_size
 from frigate.output.output import OutputProcess
 from frigate.ptz.autotrack import PtzAutoTracker
+from frigate.ptz.event_log import PtzEventLog
 from frigate.ptz.onvif import OnvifController
 from frigate.record.cleanup import RecordingCleanup
 from frigate.record.export import migrate_exports
@@ -333,7 +334,11 @@ class FrigateApp:
         self.detection_proxy = DetectorProxy()
 
     def init_onvif(self) -> None:
-        self.onvif_controller = OnvifController(self.config, self.ptz_metrics)
+        # the camera Debug view reads it, and the autotracker writes to it
+        self.ptz_event_log = PtzEventLog()
+        self.onvif_controller = OnvifController(
+            self.config, self.ptz_metrics, self.ptz_event_log
+        )
 
     def init_dispatcher(self) -> None:
         comms: list[Communicator] = []
@@ -445,6 +450,7 @@ class FrigateApp:
             self.ptz_metrics,
             self.dispatcher,
             self.stop_event,
+            self.ptz_event_log,
         )
         self.ptz_autotracker_thread.start()
 

@@ -202,6 +202,37 @@ async def camera_ptz_info(request: Request, camera_name: str):
         )
 
 
+@router.get(
+    "/{camera_name}/ptz/debug",
+    dependencies=[
+        Depends(require_camera_access),
+        Depends(require_role(["admin"])),
+    ],
+    description="Poll the live PTZ log shown in the camera Debug view. Polling keeps the log on for the camera, and the camera status is read at most once a second.",
+)
+async def camera_ptz_debug(
+    request: Request, camera_name: str, after: int = Query(default=0, ge=0)
+):
+    if camera_name not in request.app.frigate_config.cameras:
+        return JSONResponse(
+            content={"success": False, "message": "Camera not found"},
+            status_code=404,
+        )
+
+    future = asyncio.run_coroutine_threadsafe(
+        request.app.onvif.debug_snapshot(camera_name, after), request.app.onvif.loop
+    )
+
+    try:
+        snapshot = await asyncio.wrap_future(future)
+    except OnvifUnavailableError as e:
+        return JSONResponse(
+            content={"success": False, "message": str(e)}, status_code=404
+        )
+
+    return JSONResponse(content=snapshot)
+
+
 async def _onvif_request(
     request: Request,
     camera_name: str,

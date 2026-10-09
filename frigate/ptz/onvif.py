@@ -23,6 +23,13 @@ from frigate.config.camera.updater import (
     CameraConfigUpdateEnum,
     CameraConfigUpdateSubscriber,
 )
+from frigate.const import PTZ_DEBUG_STATUS_INTERVAL, PTZ_DEBUG_STATUS_TIMEOUT
+from frigate.ptz.event_log import (
+    MOVE_OPERATIONS,
+    PtzEventLog,
+    PtzSource,
+    finite_number,
+)
 from frigate.util.builtin import find_by_key
 from frigate.util.time import posix_timezone
 
@@ -198,11 +205,133 @@ def _ntp_info(ntp: Any) -> dict[str, Any]:
     }
 
 
+def space_name(uri: Any) -> str | None:
+    """Short name of a standard ONVIF relative move space, or the URI itself."""
+    if uri is None:
+        return None
+
+    uri = str(uri)
+
+    if "TranslationSpaceFov" in uri:
+        return "fov"
+
+    if "TranslationGenericSpace" in uri:
+        return "generic"
+
+    return uri
+
+
+def describe_status(status: Any) -> dict[str, Any]:
+    """The move status and position from an ONVIF GetStatus response.
+
+    Cameras leave out parts of the response, and some report MoveStatus as
+    plain text rather than per axis.
+    """
+    move_status = getattr(status, "MoveStatus", None)
+    pan_tilt = getattr(move_status, "PanTilt", None)
+
+    if pan_tilt is None and isinstance(move_status, str):
+        pan_tilt = move_status
+
+    zoom = getattr(move_status, "Zoom", None)
+    position = getattr(status, "Position", None)
+    pan_tilt_position = getattr(position, "PanTilt", None)
+    pan = finite_number(getattr(pan_tilt_position, "x", None))
+    tilt = finite_number(getattr(pan_tilt_position, "y", None))
+    zoom_position = finite_number(getattr(getattr(position, "Zoom", None), "x", None))
+    has_position = pan is not None or tilt is not None or zoom_position is not None
+
+    return {
+        "pan_tilt": None if pan_tilt is None else str(pan_tilt),
+        "zoom": None if zoom is None else str(zoom),
+        "position": {"pan": pan, "tilt": tilt, "zoom": zoom_position}
+        if has_position
+        else None,
+    }
+
+
+def describe_relative_spaces(options: Any) -> list[dict[str, Any]]:
+    """The relative pan/tilt spaces a camera offers, with their ranges."""
+    spaces = getattr(
+        getattr(options, "Spaces", None), "RelativePanTiltTranslationSpace", None
+    )
+    described = []
+
+    for space in spaces or []:
+        try:
+            described.append(
+                {
+                    "space": space_name(space["URI"]),
+                    "x": [
+                        finite_number(space["XRange"]["Min"]),
+                        finite_number(space["XRange"]["Max"]),
+                    ],
+                    "y": [
+                        finite_number(space["YRange"]["Min"]),
+                        finite_number(space["YRange"]["Max"]),
+                    ],
+                }
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    return described
+
+
+def _log_request(
+    event_log: PtzEventLog,
+    camera_name: str,
+    source: PtzSource,
+    operation: str,
+    details: dict[str, Any] | None,
+    sent: float,
+    started: float,
+    result: Any,
+    error: Exception | None,
+) -> None:
+    error_text = None
+
+    if error is not None:
+        # zeep faults carry the camera's own explanation in .message, and some
+        # errors have no text at all, which must not read as success
+        error_text = (
+            str(getattr(error, "message", None) or error) or type(error).__name__
+        )
+
+    if operation == "GetStatus":
+        event_log.record_status(
+            camera_name,
+            source,
+            None if error is not None else describe_status(result),
+            error_text,
+            at=sent,
+        )
+        return
+
+    event_log.record(
+        camera_name,
+        source,
+        "request",
+        {
+            "operation": operation,
+            **(details or {}),
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "error": error_text,
+        },
+        at=sent,
+    )
+
+
 class OnvifController:
     ptz_metrics: dict[str, PTZMetrics]
+    # tests and the autotracking simulator build controllers without __init__
+    event_log: PtzEventLog | None = None
 
     def __init__(
-        self, config: FrigateConfig, ptz_metrics: dict[str, PTZMetrics]
+        self,
+        config: FrigateConfig,
+        ptz_metrics: dict[str, PTZMetrics],
+        event_log: PtzEventLog | None = None,
     ) -> None:
         self.cams: dict[str, dict] = {}
         self.failed_cams: dict[str, dict] = {}
@@ -210,6 +339,9 @@ class OnvifController:
         self.reset_timeout = 900  # 15 minutes
         self.config = config
         self.ptz_metrics = ptz_metrics
+        self.event_log = event_log
+        # cameras with a Debug view status read in flight
+        self.debug_reads: set[str] = set()
 
         self.status_locks: dict[str, asyncio.Lock] = {}
         # serializes device management requests, which share the session's
@@ -298,6 +430,9 @@ class OnvifController:
         self.status_locks.pop(cam_name, None)
         self.device_locks.pop(cam_name, None)
         self.time_sync_results.pop(cam_name, None)
+
+        if self.event_log is not None:
+            self.event_log.remove_camera(cam_name)
 
     async def _reinit_camera(self, cam_name: str) -> None:
         """Re-initialize a camera after config change."""
@@ -406,6 +541,12 @@ class OnvifController:
             await asyncio.sleep(TIME_SYNC_RETRY_SECONDS)
 
     async def _init_onvif(self, camera_name: str) -> bool:
+        """Connect to the camera over ONVIF and detect its PTZ features."""
+        connected = await self._connect_onvif(camera_name)
+        self._record_connection(camera_name, connected)
+        return connected
+
+    async def _connect_onvif(self, camera_name: str) -> bool:
         camera_config = self.config.cameras.get(camera_name)
 
         if camera_config is None:
@@ -545,6 +686,11 @@ class OnvifController:
             logger.debug(
                 f"Unable to get PTZ configuration options for {camera_name}: {e}"
             )
+
+        cam["relative_spaces"] = describe_relative_spaces(ptz_config)
+        cam["default_relative_space"] = space_name(
+            configs.DefaultRelativePanTiltTranslationSpace
+        )
 
         # detect FOV translation space for relative movement
         if ptz_config is not None:
@@ -740,15 +886,116 @@ class OnvifController:
         cam["init"] = True
         return True
 
+    async def _ptz_request(
+        self,
+        camera_name: str,
+        source: PtzSource,
+        service: Any,
+        operation: str,
+        request: Any,
+        details: dict[str, Any] | None = None,
+    ) -> Any:
+        """Send one ONVIF request and record it in the PTZ log if it is open.
+
+        The request is sent and its result or error returned exactly as
+        without the log. Callers pass the values worth showing in details,
+        built before the call, because some request objects are reused and
+        reset afterwards.
+        """
+        call = getattr(service, operation)
+        event_log = self.event_log
+
+        if event_log is None or not event_log.is_watched(camera_name):
+            return await call(request)
+
+        sent = event_log.wall_time()
+        started = time.monotonic()
+
+        if operation in MOVE_OPERATIONS:
+            # the camera may start moving before it answers the request
+            event_log.move_started(camera_name)
+
+        try:
+            result = await call(request)
+        except Exception as e:
+            _log_request(
+                event_log,
+                camera_name,
+                source,
+                operation,
+                details,
+                sent,
+                started,
+                None,
+                e,
+            )
+            raise
+
+        _log_request(
+            event_log,
+            camera_name,
+            source,
+            operation,
+            details,
+            sent,
+            started,
+            result,
+            None,
+        )
+        return result
+
+    def _refused(
+        self,
+        camera_name: str,
+        source: PtzSource,
+        operation: str,
+        reason: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Record a request Frigate chose not to send."""
+        if self.event_log is not None:
+            self.event_log.record(
+                camera_name,
+                source,
+                "refused",
+                {"operation": operation, "reason": reason, **(details or {})},
+            )
+
+    def _capabilities(self, camera_name: str) -> dict[str, Any]:
+        """How the camera can move, for the PTZ log."""
+        cam = self.cams[camera_name]
+        return {
+            "features": list(cam["features"]),
+            "relative_spaces": cam.get("relative_spaces", []),
+            "default_relative_space": cam.get("default_relative_space"),
+        }
+
+    def _record_connection(self, camera_name: str, connected: bool) -> None:
+        event_log = self.event_log
+
+        if event_log is None or not event_log.is_watched(camera_name):
+            return
+
+        data: dict[str, Any] = {"connected": connected}
+
+        if connected:
+            data.update(self._capabilities(camera_name))
+
+        event_log.record(camera_name, PtzSource.frigate, "connection", data)
+
     async def _stop(self, camera_name: str) -> None:
         cam = self.cams[camera_name]
         move_request = cam["move_request"]
-        await cam["ptz"].Stop(
+        await self._ptz_request(
+            camera_name,
+            PtzSource.command,
+            cam["ptz"],
+            "Stop",
             {
                 "ProfileToken": move_request.ProfileToken,
                 "PanTilt": True,
                 "Zoom": True,
-            }
+            },
         )
         if (
             "focus" in cam["features"]
@@ -758,7 +1005,14 @@ class OnvifController:
             try:
                 stop_request = cam["imaging"].create_type("Stop")
                 stop_request.VideoSourceToken = cam["video_source_token"]
-                await cam["imaging"].Stop(stop_request)
+                await self._ptz_request(
+                    camera_name,
+                    PtzSource.command,
+                    cam["imaging"],
+                    "Stop",
+                    stop_request,
+                    {"service": "imaging"},
+                )
             except Exception as e:
                 logger.warning(f"Failed to stop focus for {camera_name}: {e}")
         cam["active"] = False
@@ -774,6 +1028,9 @@ class OnvifController:
 
         if "pt" not in cam["features"]:
             logger.error(f"{camera_name} does not support ONVIF pan/tilt movement.")
+            self._refused(
+                camera_name, PtzSource.command, "ContinuousMove", "unsupported"
+            )
             return
 
         cam["active"] = True
@@ -783,16 +1040,26 @@ class OnvifController:
         move_request.Velocity = {"PanTilt": {"x": x, "y": y}}
 
         try:
-            await cam["ptz"].ContinuousMove(move_request)
+            await self._ptz_request(
+                camera_name,
+                PtzSource.command,
+                cam["ptz"],
+                "ContinuousMove",
+                move_request,
+                {"pan": x, "tilt": y},
+            )
         except Exception as e:
             logger.warning(f"Onvif sending move request to {camera_name} failed: {e}")
 
-    async def _move_relative(self, camera_name: str, pan, tilt, zoom, speed) -> bool:
+    async def _move_relative(
+        self, camera_name: str, pan, tilt, zoom, speed, *, source: PtzSource
+    ) -> bool:
         """Send a relative FOV move, returning False if it was not sent."""
         cam = self.cams[camera_name]
 
         if "pt-r-fov" not in cam["features"]:
             logger.error(f"{camera_name} does not support ONVIF RelativeMove (FOV).")
+            self._refused(camera_name, source, "RelativeMove", "unsupported")
             return False
 
         metrics = self.ptz_metrics.get(camera_name)
@@ -809,6 +1076,7 @@ class OnvifController:
             logger.warning(
                 f"{camera_name} is already performing an action, not moving..."
             )
+            self._refused(camera_name, source, "RelativeMove", "busy")
             return False
 
         cam["active"] = True
@@ -826,6 +1094,7 @@ class OnvifController:
             logger.debug(f"{camera_name}: PTZ start time: {metrics.start_time.value}")
 
         move_request = cam["relative_move_request"]
+        requested_pan, requested_tilt = finite_number(pan), finite_number(tilt)
 
         # function takes in -1 to 1 for pan and tilt, interpolate to the values of the camera.
         # The onvif spec says this can report as +INF and -INF, so this may need to be modified
@@ -860,8 +1129,26 @@ class OnvifController:
 
         move_request.Speed = move_speed
 
+        # the request is reused and reset below, so log its values now
+        details = {
+            "space": "fov",
+            "pan": requested_pan,
+            "tilt": requested_tilt,
+            "zoom": finite_number(zoom) if include_zoom else 0.0,
+            "x": finite_number(pan),
+            "y": finite_number(tilt),
+            "speed": speed,
+        }
+
         try:
-            await cam["ptz"].RelativeMove(move_request)
+            await self._ptz_request(
+                camera_name,
+                source,
+                cam["ptz"],
+                "RelativeMove",
+                move_request,
+                details,
+            )
         finally:
             # reset after the move request, even if the camera can't be reached
             move_request.Translation.PanTilt.x = 0
@@ -874,12 +1161,17 @@ class OnvifController:
 
         return True
 
-    async def _move_to_preset(self, camera_name: str, preset: str) -> None:
+    async def _move_to_preset(
+        self, camera_name: str, preset: str, *, source: PtzSource
+    ) -> None:
         cam = self.cams[camera_name]
         preset = preset.lower()
 
         if preset not in cam["presets"]:
             logger.error(f"{preset} is not a valid preset for {camera_name}")
+            self._refused(
+                camera_name, source, "GotoPreset", "unknown_preset", {"preset": preset}
+            )
             return
 
         metrics = self.ptz_metrics.get(camera_name)
@@ -897,11 +1189,16 @@ class OnvifController:
         preset_token = cam["presets"][preset]
 
         try:
-            await cam["ptz"].GotoPreset(
+            await self._ptz_request(
+                camera_name,
+                source,
+                cam["ptz"],
+                "GotoPreset",
                 {
                     "ProfileToken": move_request.ProfileToken,
                     "PresetToken": preset_token,
-                }
+                },
+                {"preset": preset},
             )
         finally:
             cam["active"] = False
@@ -923,8 +1220,12 @@ class OnvifController:
         metrics.move_tilt.value = 0
 
         try:
-            await cam["ptz"].GotoHomePosition(
-                {"ProfileToken": cam["move_request"].ProfileToken}
+            await self._ptz_request(
+                camera_name,
+                PtzSource.command,
+                cam["ptz"],
+                "GotoHomePosition",
+                {"ProfileToken": cam["move_request"].ProfileToken},
             )
         finally:
             cam["active"] = False
@@ -1009,7 +1310,14 @@ class OnvifController:
         if token is not None:
             request["PresetToken"] = token
 
-        result = await cam["ptz"].SetPreset(request)
+        result = await self._ptz_request(
+            camera_name,
+            PtzSource.api,
+            cam["ptz"],
+            "SetPreset",
+            request,
+            {"preset": name},
+        )
         await self._load_presets(camera_name)
         return result or token or ""
 
@@ -1020,11 +1328,18 @@ class OnvifController:
         if not any(p["token"] == token for p in cam["preset_details"]):
             raise OnvifRequestError(f"Preset {token} not found for {camera_name}")
 
-        await cam["ptz"].RemovePreset(
+        name = next(p["name"] for p in cam["preset_details"] if p["token"] == token)
+
+        await self._ptz_request(
+            camera_name,
+            PtzSource.api,
+            cam["ptz"],
+            "RemovePreset",
             {
                 "ProfileToken": cam["move_request"].ProfileToken,
                 "PresetToken": token,
-            }
+            },
+            {"preset": name},
         )
         await self._load_presets(camera_name)
 
@@ -1034,8 +1349,12 @@ class OnvifController:
 
         # the reported home capabilities are unreliable on some firmware, so
         # let the camera decide and surface its fault instead of refusing here
-        await cam["ptz"].SetHomePosition(
-            {"ProfileToken": cam["move_request"].ProfileToken}
+        await self._ptz_request(
+            camera_name,
+            PtzSource.api,
+            cam["ptz"],
+            "SetHomePosition",
+            {"ProfileToken": cam["move_request"].ProfileToken},
         )
 
     async def _zoom(self, camera_name: str, command: OnvifCommandEnum) -> None:
@@ -1049,23 +1368,35 @@ class OnvifController:
 
         if "zoom" not in cam["features"]:
             logger.error(f"{camera_name} does not support ONVIF zooming.")
+            self._refused(
+                camera_name, PtzSource.command, "ContinuousMove", "unsupported"
+            )
             return
 
         cam["active"] = True
         move_request = cam["move_request"]
 
-        if command == OnvifCommandEnum.zoom_in:
-            move_request.Velocity = {"Zoom": {"x": 0.5}}
-        elif command == OnvifCommandEnum.zoom_out:
-            move_request.Velocity = {"Zoom": {"x": -0.5}}
+        # only zoom_in and zoom_out are routed here
+        zoom_speed = 0.5 if command == OnvifCommandEnum.zoom_in else -0.5
+        move_request.Velocity = {"Zoom": {"x": zoom_speed}}
 
-        await cam["ptz"].ContinuousMove(move_request)
+        await self._ptz_request(
+            camera_name,
+            PtzSource.command,
+            cam["ptz"],
+            "ContinuousMove",
+            move_request,
+            {"zoom": zoom_speed},
+        )
 
-    async def _zoom_absolute(self, camera_name: str, zoom, speed) -> None:
+    async def _zoom_absolute(
+        self, camera_name: str, zoom, speed, *, source: PtzSource
+    ) -> None:
         cam = self.cams[camera_name]
 
         if "zoom-a" not in cam["features"]:
             logger.error(f"{camera_name} does not support ONVIF AbsoluteMove zooming.")
+            self._refused(camera_name, source, "AbsoluteMove", "unsupported")
             return
 
         metrics = self.ptz_metrics.get(camera_name)
@@ -1079,6 +1410,7 @@ class OnvifController:
             logger.warning(
                 f"{camera_name} is already performing an action, not moving..."
             )
+            self._refused(camera_name, source, "AbsoluteMove", "busy")
             return
 
         cam["active"] = True
@@ -1090,6 +1422,7 @@ class OnvifController:
         metrics.move_tilt.value = 0
         logger.debug(f"{camera_name}: PTZ start time: {metrics.start_time.value}")
         # function takes in 0 to 1 for zoom, interpolate to the values of the camera.
+        requested_zoom = finite_number(zoom)
         zoom = numpy.interp(
             zoom,
             [0, 1],
@@ -1102,12 +1435,17 @@ class OnvifController:
         logger.debug(f"{camera_name}: Absolute zoom: {zoom}")
 
         try:
-            await cam["ptz"].AbsoluteMove(
+            await self._ptz_request(
+                camera_name,
+                source,
+                cam["ptz"],
+                "AbsoluteMove",
                 {
                     "ProfileToken": cam["move_request"].ProfileToken,
                     "Position": {"Zoom": zoom},
                     "Speed": {"Zoom": speed},
-                }
+                },
+                {"zoom": requested_zoom, "sent": finite_number(zoom), "speed": speed},
             )
         finally:
             cam["active"] = False
@@ -1127,19 +1465,30 @@ class OnvifController:
             or cam["imaging"] is None
         ):
             logger.error(f"{camera_name} does not support ONVIF continuous focus.")
+            self._refused(
+                camera_name,
+                PtzSource.command,
+                "Move",
+                "unsupported",
+                {"service": "imaging"},
+            )
             return
 
         cam["active"] = True
         move_request = cam["imaging"].create_type("Move")
         move_request.VideoSourceToken = cam["video_source_token"]
-        move_request.Focus = {
-            "Continuous": {
-                "Speed": 0.5 if command == OnvifCommandEnum.focus_in else -0.5
-            }
-        }
+        focus_speed = 0.5 if command == OnvifCommandEnum.focus_in else -0.5
+        move_request.Focus = {"Continuous": {"Speed": focus_speed}}
 
         try:
-            await cam["imaging"].Move(move_request)
+            await self._ptz_request(
+                camera_name,
+                PtzSource.command,
+                cam["imaging"],
+                "Move",
+                move_request,
+                {"service": "imaging", "focus": focus_speed},
+            )
         except Exception as e:
             logger.warning(f"Onvif sending focus request to {camera_name} failed: {e}")
             cam["active"] = False
@@ -1150,10 +1499,16 @@ class OnvifController:
         """Handle ONVIF commands asynchronously"""
         if camera_name not in self.cams.keys():
             logger.error(f"ONVIF is not configured for {camera_name}")
+            self._refused(
+                camera_name, PtzSource.command, command.value, "not_connected"
+            )
             return
 
         if not self.cams[camera_name]["init"]:
             if not await self._init_onvif(camera_name):
+                self._refused(
+                    camera_name, PtzSource.command, command.value, "not_connected"
+                )
                 return
 
         try:
@@ -1163,7 +1518,7 @@ class OnvifController:
             elif command == OnvifCommandEnum.stop:
                 await self._stop(camera_name)
             elif command == OnvifCommandEnum.preset:
-                await self._move_to_preset(camera_name, param)
+                await self._move_to_preset(camera_name, param, source=PtzSource.command)
             elif command == OnvifCommandEnum.home:
                 await self._goto_home(camera_name)
             elif command == OnvifCommandEnum.move_relative:
@@ -1177,7 +1532,12 @@ class OnvifController:
                     logger.error(f"Invalid move_relative params: {param}")
                     return
                 await self._move_relative(
-                    camera_name, float(pan), float(tilt), float(zoom), 1
+                    camera_name,
+                    float(pan),
+                    float(tilt),
+                    float(zoom),
+                    1,
+                    source=PtzSource.command,
                 )
             elif command in (OnvifCommandEnum.zoom_in, OnvifCommandEnum.zoom_out):
                 await self._zoom(camera_name, command)
@@ -1284,6 +1644,79 @@ class OnvifController:
             "last_attempt": time.time(),
         }
         return {}
+
+    async def debug_snapshot(self, camera_name: str, after: int) -> dict[str, Any]:
+        """Serve one poll of the PTZ log in the camera Debug view.
+
+        Polling keeps the log on for the camera. The camera status is read at
+        most once a second and never while another read is still waiting, and
+        the read changes nothing autotracking relies on, so an open log does
+        not change how the camera is driven.
+        """
+        event_log = self.event_log
+
+        if event_log is None:
+            raise OnvifUnavailableError("The PTZ log is not available")
+
+        event_log.watch(camera_name)
+        cam = self.cams.get(camera_name)
+        # connecting is left to the PTZ controls, which retry with a backoff
+        connected = bool(cam and cam["init"])
+
+        if connected:
+            await self._refresh_debug_status(event_log, camera_name)
+
+        status, _ = event_log.latest_status(camera_name)
+        entries, seq, missed = event_log.entries(camera_name, after)
+
+        return {
+            "session": event_log.session,
+            "connected": connected,
+            "capabilities": self._capabilities(camera_name) if connected else None,
+            "status": status,
+            "seq": seq,
+            "missed": missed,
+            "entries": entries,
+        }
+
+    async def _refresh_debug_status(
+        self, event_log: PtzEventLog, camera_name: str
+    ) -> None:
+        """Read the camera status for the Debug view unless it is fresh.
+
+        A plain GetStatus: unlike get_camera_status it leaves the move state
+        and timing that autotracking uses alone, and it does not wait for the
+        autotracker's status lock.
+        """
+        _, age = event_log.latest_status(camera_name)
+
+        if (
+            age is not None and age < PTZ_DEBUG_STATUS_INTERVAL
+        ) or camera_name in self.debug_reads:
+            return
+
+        cam = self.cams[camera_name]
+        self.debug_reads.add(camera_name)
+
+        try:
+            await asyncio.wait_for(
+                self._ptz_request(
+                    camera_name,
+                    PtzSource.debug,
+                    cam["ptz"],
+                    "GetStatus",
+                    {"ProfileToken": cam["move_request"].ProfileToken},
+                ),
+                PTZ_DEBUG_STATUS_TIMEOUT,
+            )
+        except TimeoutError:
+            event_log.record_status(camera_name, PtzSource.debug, None, "timeout")
+        except Exception:
+            # cameras fail in many ways, and _ptz_request already logged the
+            # error for the Debug view
+            pass
+        finally:
+            self.debug_reads.discard(camera_name)
 
     async def _get_onvif_session(self, camera_name: str) -> dict:
         """Return a camera's ONVIF session without initializing PTZ, so cameras
@@ -1516,7 +1949,7 @@ class OnvifController:
             )
             return False
 
-    async def get_camera_status(self, camera_name: str) -> None:
+    async def get_camera_status(self, camera_name: str, *, source: PtzSource) -> None:
         async with self.status_locks[camera_name]:
             if camera_name not in self.cams.keys():
                 logger.error(f"ONVIF is not configured for {camera_name}")
@@ -1535,8 +1968,12 @@ class OnvifController:
                     return
 
             try:
-                status = await cam["ptz"].GetStatus(
-                    {"ProfileToken": cam["move_request"].ProfileToken}
+                status = await self._ptz_request(
+                    camera_name,
+                    source,
+                    cam["ptz"],
+                    "GetStatus",
+                    {"ProfileToken": cam["move_request"].ProfileToken},
                 )
             except Exception:
                 pass  # We're unsupported, that'll be reported in the next check.

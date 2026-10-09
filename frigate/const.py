@@ -194,6 +194,19 @@ AUTOTRACKING_SETTLE_HISTORY = 15
 AUTOTRACKING_STOP_TIMEOUT = 15.0
 AUTOTRACKING_STOP_REMINDER = 60.0
 
+# PTZ debug log
+
+# seconds a camera's PTZ log stays on after the Debug view last polled it
+PTZ_DEBUG_WATCH_TIMEOUT = 5.0
+# seconds and number of entries kept for the Debug view between polls
+PTZ_DEBUG_RETENTION = 30.0
+PTZ_DEBUG_MAX_ENTRIES = 500
+# how often the Debug view may read the camera status, and how long a read may take
+PTZ_DEBUG_STATUS_INTERVAL = 1.0
+PTZ_DEBUG_STATUS_TIMEOUT = 2.0
+# seconds after Frigate's last move before a position change counts as an outside move
+PTZ_DEBUG_EXTERNAL_GRACE = 2.0
+
 # Auth
 
 JWT_SECRET_ENV_VAR = "FRIGATE_JWT_SECRET"

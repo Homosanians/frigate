@@ -193,6 +193,21 @@ In security and surveillance, it's common to use "spotter" cameras in combinatio
 
 ## Troubleshooting and FAQ
 
+### Watching what the camera does
+
+The camera's [debug view](/usage/live#the-single-camera-view) has a **PTZ** tab for cameras with ONVIF configured, shown to admin users. While the tab is open, it shows a live log of every ONVIF request Frigate sends to the camera, with the values sent, how long the camera took to answer and any error, along with the move status and position the camera reports. It also shows autotracking decisions: where the tracked object was, how far Frigate decided to move, which moves it skipped and why, how long the video took to settle after a move, and calibration progress.
+
+Comparing the move Frigate asked for with the position the camera reports afterwards shows whether the camera carries out relative moves correctly. If the position changes while Frigate sent no command, something else moved the camera, such as a tour in the camera's firmware or another NVR.
+
+Frigate records this log only while the tab is open, and reads the camera's status at most once a second for it. To look into something that happened earlier, enable debug logs:
+
+```yaml
+logger:
+  logs:
+    frigate.ptz.autotrack: debug
+    frigate.ptz.onvif: debug
+```
+
 ### Camera Compatibility
 
 <FaqItem id="which-ptz-camera-should-i-use-for-autotracking" question="Which PTZ camera should I use for autotracking?">

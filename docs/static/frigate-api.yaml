@@ -5913,6 +5913,48 @@ paths:
         - frigateUserAuth: []
       x-required-role: camera
       description: '**Access:** Authenticated user with access to the referenced camera.'
+  /{camera_name}/ptz/debug:
+    get:
+      tags:
+        - Media
+      summary: Camera Ptz Debug
+      description: |-
+        **Access:** Admin role required.
+
+        Poll the live PTZ log shown in the camera Debug view. Polling keeps the log on for the camera, and the camera status is read at most once a second.
+      operationId: camera_ptz_debug__camera_name__ptz_debug_get
+      parameters:
+        - name: camera_name
+          in: path
+          required: true
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Camera Name
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+            title: After
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+        - frigateAdminAuth: []
+      x-required-role: admin
   /{camera_name}/ptz/presets:
     post:
       tags:

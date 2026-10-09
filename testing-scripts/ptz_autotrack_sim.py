@@ -26,7 +26,7 @@ frigate/version.py must exist (it is generated during the image build).
 Useful options: --stream-latency to fix the latency instead of measuring it,
 --fov-scale for a camera that moves more or less than asked, --idle-before-start
 and --early-idle for firmware that reports a move finished too soon, --calibrate,
---sweep, and --debug for the autotracker logs.
+--sweep, --ptz-log, and --debug for the autotracker logs.
 """
 
 import argparse
@@ -57,6 +57,7 @@ from frigate.ptz.autotrack import (
     PtzMotionEstimator,
     ptz_moving_at_frame_time,
 )
+from frigate.ptz.event_log import PtzEventLog
 from frigate.ptz.onvif import OnvifController
 from frigate.track.norfair_tracker import frigate_distance
 
@@ -316,6 +317,7 @@ class Simulation:
         calibrate: bool = False,
         weights: list[float] | None = None,
         seed: int = 1,
+        ptz_log: bool = False,
     ) -> None:
         self.camera = camera
         self.pipeline = pipeline
@@ -360,6 +362,18 @@ class Simulation:
         )
         self.objects: dict[str, SimpleNamespace] = {}
         self.hits: dict[str, int] = {}
+
+        # an open Debug view, to measure how much the PTZ log records
+        self.ptz_log = (
+            PtzEventLog(clock=self.clock.time, wall_clock=self.clock.time)
+            if ptz_log
+            else None
+        )
+        self.ptz_log_after = 0
+        self.ptz_log_rows: set[int] = set()
+        self.ptz_log_updates = 0
+        self.ptz_log_most_per_poll = 0
+        self.ptz_log_kinds: dict[str, int] = {}
 
     # world
 
@@ -672,6 +686,8 @@ class Simulation:
                 },
             }
         }
+        onvif.event_log = self.ptz_log
+        onvif.debug_reads = set()
         self.onvif = onvif
 
         tracker = PtzAutoTracker.__new__(PtzAutoTracker)
@@ -694,6 +710,8 @@ class Simulation:
         tracker.move_coefficients = {}
         tracker.zoom_time = {}
         tracker.config_subscriber = MagicMock()
+        tracker.event_log = self.ptz_log
+        tracker.seen_video_stop = {}
         self.tracker = tracker
 
     async def maintenance(self) -> None:
@@ -702,8 +720,30 @@ class Simulation:
             if self.config.cameras[CAMERA].onvif.autotracking.enabled:
                 await self.tracker.camera_maintenance(CAMERA)
 
+    async def poll_ptz_log(self) -> None:
+        """Poll the PTZ log once a second, as an open Debug view does."""
+        while not self.done:
+            snapshot = await self.onvif.debug_snapshot(CAMERA, self.ptz_log_after)
+            self.ptz_log_after = snapshot["seq"]
+            self.ptz_log_most_per_poll = max(
+                self.ptz_log_most_per_poll, len(snapshot["entries"])
+            )
+
+            for entry in snapshot["entries"]:
+                if entry["id"] in self.ptz_log_rows:
+                    self.ptz_log_updates += 1
+                    continue
+
+                self.ptz_log_rows.add(entry["id"])
+                self.ptz_log_kinds[entry["kind"]] = (
+                    self.ptz_log_kinds.get(entry["kind"], 0) + 1
+                )
+
+            await asyncio.sleep(1)
+
     async def run(self) -> dict[str, Any]:
         self.build_controllers()
+        log_poll = asyncio.ensure_future(self.poll_ptz_log()) if self.ptz_log else None
         source = asyncio.ensure_future(self.frame_source())
         await asyncio.sleep(0.5)
 
@@ -727,7 +767,12 @@ class Simulation:
 
         self.done = True
         self.tracker.stop_event.set()
-        await asyncio.gather(source, maintenance, return_exceptions=True)
+        await asyncio.gather(
+            source,
+            maintenance,
+            *([log_poll] if log_poll else []),
+            return_exceptions=True,
+        )
 
         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         for task in pending:
@@ -786,7 +831,7 @@ class Simulation:
             if x["motor_moving"] and x.get("flagged_moving") is False
         ]
 
-        return {
+        summary = {
             "visible_walk": round(sum(visible(x) for x in walk) / max(1, len(walk)), 3),
             "mean_abs_offset_walk": round(
                 float(np.mean([abs(x["offset"]) for x in walk])) if walk else 0.0, 3
@@ -813,6 +858,18 @@ class Simulation:
                 CAMERA
             ].onvif.autotracking.movement_weights,
         }
+
+        if self.ptz_log is not None:
+            duration = self.clock.now - CLOCK_START
+            summary["ptz_log"] = {
+                "rows": len(self.ptz_log_rows),
+                "rows_per_second": round(len(self.ptz_log_rows) / duration, 2),
+                "row_updates": self.ptz_log_updates,
+                "most_per_poll": self.ptz_log_most_per_poll,
+                "by_kind": self.ptz_log_kinds,
+            }
+
+        return summary
 
     def plot(self, path: str, title: str) -> None:
         import matplotlib
@@ -875,8 +932,9 @@ def run_simulation(
     seed: int = 1,
     plot: str | None = None,
     title: str = "",
+    ptz_log: bool = False,
 ) -> tuple[dict[str, Any], Simulation]:
-    sim = Simulation(camera, pipeline, scenario, calibrate, weights, seed)
+    sim = Simulation(camera, pipeline, scenario, calibrate, weights, seed, ptz_log)
 
     selector = VirtualTimeSelector(sim.clock)
     loop = asyncio.SelectorEventLoop(selector)
@@ -896,7 +954,10 @@ def run_simulation(
         autotrack_module.AUTOTRACKING_SETTLE_MOTION_STEP = (  # type: ignore[attr-defined]
             pipeline.settle_threshold
         )
-    onvif_module.time = SimpleNamespace(time=sim.clock.time)  # type: ignore[assignment]
+    # the request log times requests with time.monotonic
+    onvif_module.time = SimpleNamespace(  # type: ignore[assignment]
+        time=sim.clock.time, monotonic=sim.clock.time
+    )
     autotrack_module.update_yaml_file_bulk = lambda *a, **k: None  # type: ignore[assignment]
     autotrack_module.find_config_file = lambda: "/dev/null"  # type: ignore[assignment]
 
@@ -970,6 +1031,11 @@ def parse_args() -> argparse.Namespace:
         help="sweep latency and MoveStatus behavior instead of a single run",
     )
     p.add_argument("--debug", action="store_true", help="autotracker debug logs")
+    p.add_argument(
+        "--ptz-log",
+        action="store_true",
+        help="poll the PTZ debug log like an open Debug view and report its volume",
+    )
     return p.parse_args()
 
 
@@ -1019,6 +1085,7 @@ def main() -> None:
             title=f"latency {args.latency}s (stream_latency {args.stream_latency}), "
             f"pan {args.pan_speed} deg/s, "
             f"person {args.person_speed} deg/s",
+            ptz_log=args.ptz_log,
         )
         if args.dump:
             with open(args.dump, "w") as f:
