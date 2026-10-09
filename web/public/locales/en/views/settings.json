@@ -170,6 +170,10 @@
         "label": "Always Show Camera Names",
         "desc": "Always show the camera names in a chip in the multi-camera live view dashboard."
       },
+      "seamlessTiles": {
+        "label": "Seamless Tiles",
+        "desc": "Remove the gaps and rounded corners between cameras on the live dashboard so they sit edge to edge, like a video wall."
+      },
       "naturalAspectLayout": {
         "label": "Use Natural Aspect Ratios",
         "desc": "On camera group live view dashboards, size each tile to its camera's own natural aspect ratio. When disabled, cameras are snapped to a standard wide, landscape, or tall tile shape.",

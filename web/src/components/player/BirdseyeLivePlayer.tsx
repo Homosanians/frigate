@@ -15,6 +15,7 @@ type LivePlayerProps = {
   pip?: boolean;
   containerRef: React.MutableRefObject<HTMLDivElement | null>;
   playerRef?: React.MutableRefObject<HTMLDivElement | null>;
+  seamless?: boolean;
   onClick?: () => void;
 };
 
@@ -25,6 +26,7 @@ export default function BirdseyeLivePlayer({
   pip,
   containerRef,
   playerRef,
+  seamless = false,
   onClick,
 }: LivePlayerProps) {
   let player;
@@ -50,6 +52,7 @@ export default function BirdseyeLivePlayer({
         containerRef={containerRef}
         playbackEnabled={true}
         useWebGL={true}
+        rounded={!seamless}
       />
     );
   } else {
@@ -60,7 +63,8 @@ export default function BirdseyeLivePlayer({
     <div
       ref={containerRef}
       className={cn(
-        "relative flex w-full cursor-pointer justify-center overflow-hidden rounded-lg md:rounded-2xl",
+        "relative flex w-full cursor-pointer justify-center overflow-hidden",
+        !seamless && "rounded-lg md:rounded-2xl",
         className,
       )}
       onClick={onClick}

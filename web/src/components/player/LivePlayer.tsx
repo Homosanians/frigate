@@ -41,6 +41,7 @@ type LivePlayerProps = {
   preferredLiveMode: LivePlayerMode;
   showStillWithoutActivity?: boolean;
   alwaysShowCameraName?: boolean;
+  seamless?: boolean;
   useWebGL: boolean;
   windowVisible?: boolean;
   playAudio?: boolean;
@@ -70,6 +71,7 @@ export default function LivePlayer({
   preferredLiveMode,
   showStillWithoutActivity = true,
   alwaysShowCameraName = false,
+  seamless = false,
   useWebGL = false,
   windowVisible = true,
   playAudio = false,
@@ -372,6 +374,7 @@ export default function LivePlayer({
             cameraActive || !showStillWithoutActivity || liveReady
           }
           useWebGL={useWebGL}
+          rounded={!seamless}
           setStats={setStats}
           containerRef={containerRef ?? internalContainerRef}
           onPlaying={playerIsPlaying}
@@ -385,6 +388,9 @@ export default function LivePlayer({
       <ActivityIndicator className={"w-full [.bg-black_&]:text-white"} />
     );
   }
+
+  const showTracking =
+    activeTracking && ((showStillWithoutActivity && !liveReady) || liveReady);
 
   return (
     <div
@@ -400,9 +406,10 @@ export default function LivePlayer({
       className={cn(
         // the card owns the corner: overflow-hidden clips the stream, the still
         // image, and every overlay to this one radius so they stay concentric
-        "relative flex w-full cursor-pointer justify-center overflow-hidden rounded-lg outline md:rounded-2xl",
-        activeTracking &&
-          ((showStillWithoutActivity && !liveReady) || liveReady)
+        "relative flex w-full cursor-pointer justify-center overflow-hidden outline",
+        !seamless && "rounded-lg md:rounded-2xl",
+        // seamless tiles touch, so an outer outline would cover the neighbors
+        showTracking && !seamless
           ? "shadow-severity_alert outline-[3px] outline-severity_alert"
           : "outline-0 outline-background",
         "transition-all duration-500",
@@ -506,8 +513,18 @@ export default function LivePlayer({
           showFps={false}
           reloadInterval={stillReloadInterval}
           periodicCache
+          rounded={!seamless}
         />
       </div>
+
+      {seamless && (
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-0 z-20 border-[3px] transition-colors duration-500",
+            showTracking ? "border-severity_alert" : "border-transparent",
+          )}
+        />
+      )}
 
       {offline && inDashboard && (
         <>

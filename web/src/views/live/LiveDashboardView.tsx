@@ -226,6 +226,7 @@ export default function LiveDashboardView({
 
   const [globalAutoLive] = useUserPersistence("autoLiveView", true);
   const [displayCameraNames] = useUserPersistence("displayCameraNames", false);
+  const [seamlessTiles] = useUserPersistence("seamlessLiveTiles", false);
 
   const { allGroupsStreamingSettings, setAllGroupsStreamingSettings } =
     useStreamingSettings();
@@ -413,7 +414,10 @@ export default function LiveDashboardView({
 
   return (
     <div
-      className="scrollbar-container size-full select-none overflow-y-auto px-1 pt-2 [scrollbar-gutter:stable] md:p-2"
+      className={cn(
+        "scrollbar-container size-full select-none overflow-y-auto px-1 pt-2 [scrollbar-gutter:stable]",
+        seamlessTiles ? "md:p-0" : "md:p-2",
+      )}
       ref={containerRef}
     >
       {isMobile && (
@@ -484,7 +488,7 @@ export default function LiveDashboardView({
       ) : (
         <>
           {!fullscreen && events && events.length > 0 && (
-            <ScrollArea>
+            <ScrollArea className={cn(seamlessTiles && "mb-2")}>
               <TooltipProvider>
                 <div className="flex items-center gap-2 px-1">
                   {events.map((event) => {
@@ -507,7 +511,8 @@ export default function LiveDashboardView({
             <>
               <div
                 className={cn(
-                  "mt-2 grid grid-cols-1 gap-2 px-2 md:gap-4",
+                  "grid grid-cols-1",
+                  seamlessTiles ? "gap-0 px-0" : "mt-2 gap-2 px-2 md:gap-4",
                   mobileLayout == "grid" &&
                     "grid-cols-2 xl:grid-cols-3 3xl:grid-cols-4",
                   isMobile && "px-0",
@@ -533,6 +538,7 @@ export default function LiveDashboardView({
                       liveMode={birdseyeConfig.restream ? "mse" : "jsmpeg"}
                       onClick={() => onSelectCamera("birdseye")}
                       containerRef={birdseyeContainerRef}
+                      seamless={seamlessTiles}
                     />
                   </div>
                 )}
@@ -625,6 +631,7 @@ export default function LiveDashboardView({
                           showStillWithoutActivity ?? true
                         }
                         alwaysShowCameraName={displayCameraNames}
+                        seamless={seamlessTiles}
                         useWebGL={useWebGL}
                         playInBackground={false}
                         showStats={statsStates[camera.name]}
