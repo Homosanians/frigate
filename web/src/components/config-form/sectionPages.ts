@@ -15,6 +15,7 @@ export const CAMERA_PAGE_BY_SECTION: Record<string, string> = {
   face_recognition: "cameraFaceRecognition",
   lpr: "cameraLpr",
   timestamp_style: "cameraTimestampStyle",
+  image_source: "cameraImageSource",
   onvif: "cameraOnvif",
 };
 
@@ -30,6 +31,7 @@ export const GLOBAL_PAGE_BY_SECTION: Record<string, string> = {
   audio: "globalAudioEvents",
   live: "globalLivePlayback",
   timestamp_style: "globalTimestampStyle",
+  image_source: "globalImageSource",
   database: "systemDatabase",
   tls: "systemTls",
   auth: "systemAuthentication",

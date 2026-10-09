@@ -168,6 +168,10 @@ const GlobalTimestampStyleSettingsPage = createSectionPage(
   "timestamp_style",
   "global",
 );
+const GlobalImageSourceSettingsPage = createSectionPage(
+  "image_source",
+  "global",
+);
 
 const SystemDatabaseSettingsPage = createSectionPage("database", "global");
 const SystemTlsSettingsPage = createSectionPage("tls", "global");
@@ -241,6 +245,10 @@ const CameraTimestampStyleSettingsPage = createSectionPage(
   "timestamp_style",
   "camera",
 );
+const CameraImageSourceSettingsPage = createSectionPage(
+  "image_source",
+  "camera",
+);
 
 // Every section key in `settingsViewGroups` maps to the view that renders it.
 const SECTION_VIEWS = {
@@ -257,6 +265,7 @@ const SECTION_VIEWS = {
   globalAudioEvents: GlobalAudioEventsSettingsPage,
   globalLivePlayback: GlobalLivePlaybackSettingsPage,
   globalTimestampStyle: GlobalTimestampStyleSettingsPage,
+  globalImageSource: GlobalImageSourceSettingsPage,
   cameraDetect: CameraDetectSettingsPage,
   cameraObjects: CameraObjectsSettingsPage,
   cameraMotion: CameraMotionSettingsPage,
@@ -276,6 +285,7 @@ const SECTION_VIEWS = {
   cameraOnvif: CameraOnvifSettingsPage,
   cameraMqttConfig: CameraMqttConfigSettingsPage,
   cameraTimestampStyle: CameraTimestampStyleSettingsPage,
+  cameraImageSource: CameraImageSourceSettingsPage,
   integrationSemanticSearch: IntegrationSemanticSearchSettingsPage,
   integrationGenerativeAi: IntegrationGenerativeAiSettingsPage,
   integrationFaceRecognition: IntegrationFaceRecognitionSettingsPage,
@@ -331,6 +341,7 @@ const CAMERA_SELECT_BUTTON_PAGES = [
   "cameraMqttConfig",
   "cameraOnvif",
   "cameraTimestampStyle",
+  "cameraImageSource",
   "masksAndZones",
   "motionTuner",
   "triggers",
@@ -356,6 +367,7 @@ const CAMERA_SECTION_MAPPING: Record<string, SettingsType> = {
   mqtt: "cameraMqttConfig",
   onvif: "cameraOnvif",
   timestamp_style: "cameraTimestampStyle",
+  image_source: "cameraImageSource",
 };
 
 // Reverse mapping: page key → config section key
@@ -392,6 +404,7 @@ const GLOBAL_SECTION_MAPPING: Record<string, SettingsType> = {
   audio: "globalAudioEvents",
   live: "globalLivePlayback",
   timestamp_style: "globalTimestampStyle",
+  image_source: "globalImageSource",
   notifications: "notifications",
 };
 

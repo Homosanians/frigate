@@ -926,6 +926,34 @@ live:
   # 1 is the highest quality, and 31 is the lowest. Lower quality feeds utilize less CPU resources.
   quality: 8
 
+# Optional: stream that saved images are taken from
+# NOTE: Can be overridden at the camera level
+image_source:
+  # Optional: Stream used for saved face and classification training images, clean
+  #           snapshots, and a second license plate OCR pass (default: shown below)
+  #           "detect": use the detect stream
+  #           "main": replace them with a frame from the main stream once one can be fetched
+  #           "auto": like "main", but only when that frame is larger than the detect stream
+  # NOTE: The main stream frame comes from the recording, so it arrives after the
+  #       recording segment is saved (about 10-15 seconds later). Cameras that are not
+  #       recording use the current frame of their first go2rtc live stream instead.
+  #       The detect stream image is kept whenever no matching frame is found.
+  stream: detect
+  # Optional: The streams are rarely in sync, so the main stream recording is searched
+  #           around the detect frame time for the frame showing the same moment.
+  #           Minimum similarity (normalized correlation of the object's region, 0-1)
+  #           a main stream frame needs to be used (default: shown below)
+  #           Higher values keep the detect image more often, lower values risk
+  #           saving a frame from a different moment.
+  match_threshold: 0.9
+  # Optional: Seconds before the detect frame time to search (default: shown below)
+  #           Raise this if the recording runs ahead of the detect stream.
+  search_before: 4.0
+  # Optional: Seconds after the detect frame time to search (default: shown below)
+  # NOTE: Images are replaced only once this much of the recording has been saved,
+  #       so higher values delay the replacement.
+  search_after: 4.0
+
 # Optional: in-feed timestamp style configuration
 # NOTE: Can be overridden at the camera level
 timestamp_style:

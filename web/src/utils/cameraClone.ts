@@ -348,6 +348,7 @@ export type CloneCategoryKey =
   | "birdseye"
   | "mqtt"
   | "timestamp_style"
+  | "image_source"
   | "onvif"
   | "lpr"
   | "face_recognition"
@@ -387,6 +388,7 @@ export const CLONE_CATEGORIES: readonly CloneCategory[] = [
   { key: "birdseye", group: "general", defaultOnExisting: true },
   { key: "mqtt", group: "general", defaultOnExisting: true },
   { key: "timestamp_style", group: "general", defaultOnExisting: true },
+  { key: "image_source", group: "general", defaultOnExisting: true },
   { key: "onvif", group: "general", defaultOnExisting: false },
   { key: "lpr", group: "general", defaultOnExisting: true },
   { key: "face_recognition", group: "general", defaultOnExisting: true },
@@ -559,6 +561,7 @@ export function buildClonedCameraPayloads({
     { key: "birdseye", section: "birdseye" },
     { key: "mqtt", section: "mqtt" },
     { key: "timestamp_style", section: "timestamp_style" },
+    { key: "image_source", section: "image_source" },
     { key: "onvif", section: "onvif" },
     { key: "lpr", section: "lpr" },
     { key: "face_recognition", section: "face_recognition" },
@@ -583,6 +586,7 @@ export function buildClonedCameraPayloads({
     "ffmpeg",
     "live",
     "timestamp_style",
+    "image_source",
   ];
   const syntheticTargetCamera = targetIsNew
     ? ({

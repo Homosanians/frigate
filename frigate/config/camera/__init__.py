@@ -4,6 +4,7 @@ from .camera import *  # noqa: F403
 from .detect import *  # noqa: F403
 from .ffmpeg import *  # noqa: F403
 from .genai import *  # noqa: F403
+from .image_source import *  # noqa: F403
 from .live import *  # noqa: F403
 from .motion import *  # noqa: F403
 from .mqtt import *  # noqa: F403

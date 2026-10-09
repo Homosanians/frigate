@@ -25,6 +25,12 @@ from frigate.data_processing.common.face.recognizer import (
     FaceNetRecognizer,
     FaceRecognizer,
 )
+from frigate.data_processing.common.hires import (
+    expand_box,
+    reference_from_yuv,
+    replace_image,
+    scale_box,
+)
 from frigate.types import TrackedObjectUpdateTypesEnum
 from frigate.util.builtin import EventsPerSecond, InferenceSpeed
 from frigate.util.file import trim_oldest_files
@@ -39,6 +45,9 @@ logger = logging.getLogger(__name__)
 
 MAX_FACES_ATTEMPTS_AFTER_REC = 6
 MAX_FACE_ATTEMPTS = 12
+
+# how far around the scaled face box the main stream frame is searched
+HIRES_FACE_SEARCH_PAD = 1.0
 
 
 class FaceRealTimeProcessor(RealTimeProcessorApi):
@@ -162,6 +171,13 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
                 max(0, face_box[1]) : min(frame.shape[0], face_box[3]),
                 max(0, face_box[0]) : min(frame.shape[1], face_box[2]),
             ]
+            # the detected box is relative to the person crop
+            frame_face_box = (
+                left + face_box[0],
+                top + face_box[1],
+                left + face_box[2],
+                top + face_box[3],
+            )
 
             # check that face is correct size
             if area(face_box) < self.config.cameras[camera].face_recognition.min_area:
@@ -201,6 +217,7 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
                 return
 
             face_box = attr_box
+            frame_face_box = (attr_box[0], attr_box[1], attr_box[2], attr_box[3])
 
             face_frame = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
 
@@ -229,9 +246,28 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
             f"Detected best face for person as: {sub_label} with probability {score}"
         )
 
-        self.write_face_attempt(
+        attempt_file = self.write_face_attempt(
             face_frame, id, datetime.datetime.now().timestamp(), sub_label, score
         )
+
+        if (
+            attempt_file
+            and self.hires
+            and obj_data.get("frame_time")
+            and obj_data.get("box")
+        ):
+            self.hires.submit(
+                camera,
+                obj_data["frame_time"],
+                f"face:{id}",
+                lambda hires_frame, scale_x, scale_y: self.__upgrade_face_attempt(
+                    attempt_file, frame_face_box, hires_frame, scale_x, scale_y
+                ),
+                # the person is what places this moment in the main stream
+                reference_from_yuv(
+                    frame, obj_data["box"], self.config.cameras[camera].detect.height
+                ),
+            )
 
         if id not in self.person_face_history:
             self.person_face_history[id] = []
@@ -476,17 +512,65 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
         timestamp: float,
         sub_label: str,
         score: float,
+    ) -> str | None:
+        """Save a face attempt and return the file it was written to."""
+        if not self.config.face_recognition.save_attempts:
+            return None
+
+        # write face to library
+        folder = os.path.join(FACE_DIR, "train")
+
+        if "-" in sub_label:
+            sub_label = sub_label.replace("-", "_")
+
+        file = os.path.join(folder, f"{event_id}-{timestamp}-{sub_label}-{score}.webp")
+        os.makedirs(folder, exist_ok=True)
+        cv2.imwrite(file, frame)
+        trim_oldest_files(folder, self.config.face_recognition.save_attempts)
+        return file
+
+    def __upgrade_face_attempt(
+        self,
+        file: str,
+        face_box: tuple[int, int, int, int],
+        frame: np.ndarray,
+        scale_x: float,
+        scale_y: float,
     ) -> None:
-        if self.config.face_recognition.save_attempts:
-            # write face to library
-            folder = os.path.join(FACE_DIR, "train")
+        """Replace a saved face attempt with the same face from the main stream."""
+        # the attempt may have been trimmed or moved into the library already
+        if not os.path.exists(file):
+            return
 
-            if "-" in sub_label:
-                sub_label = sub_label.replace("-", "_")
+        # the frame is only matched to the detect frame rate, so the face is
+        # found again in a padded area around where the detect stream saw it
+        left, top, right, bottom = expand_box(
+            scale_box(face_box, scale_x, scale_y), frame.shape, HIRES_FACE_SEARCH_PAD
+        )
+        search_area = frame[top:bottom, left:right]
 
-            file = os.path.join(
-                folder, f"{event_id}-{timestamp}-{sub_label}-{score}.webp"
-            )
-            os.makedirs(folder, exist_ok=True)
-            cv2.imwrite(file, frame)
-            trim_oldest_files(folder, self.config.face_recognition.save_attempts)
+        if search_area.size == 0:
+            return
+
+        detection = self.face_detector.detect(
+            search_area, self.face_config.detection_threshold
+        )
+
+        if detection is None:
+            logger.debug("No face found in the main stream frame, keeping detect crop")
+            return
+
+        hires_box = detection.face
+        face = search_area[hires_box[1] : hires_box[3], hires_box[0] : hires_box[2]]
+
+        if face.size == 0:
+            return
+
+        # a face of a very different size is someone else in the padded area
+        expected_width = (face_box[2] - face_box[0]) * scale_x
+
+        if not 0.5 <= face.shape[1] / max(expected_width, 1) <= 2.0:
+            logger.debug("Main stream face does not match the detect crop, keeping it")
+            return
+
+        replace_image(file, face)

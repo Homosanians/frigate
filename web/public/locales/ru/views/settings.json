@@ -74,6 +74,7 @@
     "globalMotion": "Обнаружение движения",
     "globalObjects": "Объекты",
     "globalLivePlayback": "Воспроизведение в реальном времени",
+    "globalImageSource": "Источник изображений",
     "globalTimestampStyle": "Стиль временной метки",
     "systemDatabase": "База данных",
     "systemTls": "TLS",
@@ -84,6 +85,7 @@
     "cameraMqttConfig": "MQTT",
     "cameraOnvif": "ONVIF",
     "cameraUi": "Интерфейс камеры",
+    "cameraImageSource": "Источник изображений",
     "cameraTimestampStyle": "Стиль временной метки",
     "cameraMqtt": "MQTT камеры",
     "maintenance": "Обслуживание",
@@ -1255,6 +1257,7 @@
           "notifications": "Уведомления",
           "birdseye": "Birdseye",
           "mqtt": "MQTT",
+          "image_source": "Источник изображений",
           "timestamp_style": "Стиль временной метки",
           "onvif": "ONVIF",
           "lpr": "Распознавание номерных знаков",
@@ -1386,6 +1389,11 @@
       "label": "Новое значение",
       "reset": "Сбросить"
     }
+  },
+  "imageSourceStream": {
+    "detect": "Поток детекции",
+    "main": "Основной поток",
+    "auto": "Наибольшее разрешение"
   },
   "timestampPosition": {
     "tl": "Сверху слева",
@@ -1569,6 +1577,7 @@
       "audio": "Аудио",
       "notifications": "Уведомления",
       "live": "Просмотр в реальном времени",
+      "image_source": "Источник изображений",
       "timestamp_style": "Временные метки",
       "mqtt": "MQTT",
       "database": "База данных",
@@ -1656,6 +1665,9 @@
     },
     "live": {
       "title": "Настройки просмотра в реальном времени"
+    },
+    "image_source": {
+      "title": "Настройки источника изображений"
     },
     "timestamp_style": {
       "title": "Настройки временной метки"

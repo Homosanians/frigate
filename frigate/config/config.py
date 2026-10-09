@@ -52,6 +52,7 @@ from .camera.birdseye import BirdseyeConfig
 from .camera.detect import DetectConfig
 from .camera.ffmpeg import FfmpegConfig
 from .camera.genai import GenAIConfig, GenAIRoleEnum
+from .camera.image_source import ImageSourceConfig
 from .camera.mask import ObjectMaskConfig
 from .camera.motion import MotionConfig
 from .camera.notification import NotificationConfig
@@ -677,6 +678,11 @@ class FrigateConfig(FrigateBaseModel):
         title="Timestamp style",
         description="Styling options for in-feed timestamps applied to debug view and snapshots.",
     )
+    image_source: ImageSourceConfig = Field(
+        default_factory=ImageSourceConfig,
+        title="Image source",
+        description="Which stream saved images are taken from for all cameras; can be overridden per-camera.",
+    )
 
     # Classification Config
     audio_transcription: AudioTranscriptionConfig = Field(
@@ -1103,6 +1109,7 @@ class FrigateConfig(FrigateBaseModel):
                 "audio_transcription": ...,
                 "birdseye": ...,
                 "face_recognition": ...,
+                "image_source": ...,
                 "lpr": ...,
                 "record": ...,
                 "snapshots": ...,

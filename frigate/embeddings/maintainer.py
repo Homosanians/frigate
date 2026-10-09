@@ -4,10 +4,13 @@ import base64
 import datetime
 import json
 import logging
+import os
 import threading
 from multiprocessing.synchronize import Event as MpEvent
 from typing import Any
 
+import cv2
+import numpy as np
 from peewee import DoesNotExist
 
 from frigate.comms.config_updater import ConfigSubscriber
@@ -39,6 +42,12 @@ from frigate.config.camera.updater import (
     CameraConfigUpdateSubscriber,
 )
 from frigate.config.classification import ObjectClassificationType
+from frigate.const import CLIPS_DIR
+from frigate.data_processing.common.hires import (
+    HiResUpgrader,
+    reference_from_bgr,
+    replace_image,
+)
 from frigate.data_processing.common.license_plate.model import (
     LicensePlateModelRunner,
 )
@@ -76,7 +85,11 @@ from frigate.models import Event, Recordings, ReviewSegment, Timeline, Trigger
 from frigate.types import TrackedObjectUpdateTypesEnum
 from frigate.util.builtin import serialize
 from frigate.util.file import get_event_thumbnail_bytes
-from frigate.util.image import SharedMemoryFrameManager
+from frigate.util.image import (
+    SharedMemoryFrameManager,
+    get_image_quality_params,
+    relative_box_to_absolute,
+)
 
 from .embeddings import Embeddings
 
@@ -118,10 +131,13 @@ class EmbeddingMaintainer(threading.Thread):
                 CameraConfigUpdateEnum.detect,
                 CameraConfigUpdateEnum.face_recognition,
                 CameraConfigUpdateEnum.ffmpeg,
+                CameraConfigUpdateEnum.image_source,
+                CameraConfigUpdateEnum.live,
                 CameraConfigUpdateEnum.lpr,
                 CameraConfigUpdateEnum.motion,
                 CameraConfigUpdateEnum.objects,
                 CameraConfigUpdateEnum.object_genai,
+                CameraConfigUpdateEnum.record,
                 CameraConfigUpdateEnum.review,
                 CameraConfigUpdateEnum.review_genai,
                 CameraConfigUpdateEnum.semantic_search,
@@ -235,6 +251,12 @@ class EmbeddingMaintainer(threading.Thread):
                 )
             )
 
+        # swaps images saved from the detect stream for main stream ones
+        self.hires = HiResUpgrader(self.config)
+
+        for realtime_processor in self.realtime_processors:
+            realtime_processor.hires = self.hires
+
         # post processors
         self.post_processors: list[PostProcessorApi] = []
 
@@ -346,6 +368,7 @@ class EmbeddingMaintainer(threading.Thread):
             self._process_review_updates()
             self._process_frame_updates()
             self._process_deferred_results()
+            self.hires.process()
             self._expire_dedicated_lpr()
             self._process_finalized()
             self._process_event_metadata()
@@ -355,6 +378,7 @@ class EmbeddingMaintainer(threading.Thread):
         for processor in self.realtime_processors:
             processor.shutdown()
 
+        self.hires.stop()
         self.config_updater.stop()
         self.enrichment_config_subscriber.stop()
         self.event_subscriber.stop()
@@ -635,6 +659,9 @@ class EmbeddingMaintainer(threading.Thread):
 
                 continue
 
+            if updated_db:
+                self._upgrade_snapshot(event)
+
             # call any defined post processors
             for processor in self.post_processors:
                 if isinstance(processor, LicensePlatePostProcessor):
@@ -685,6 +712,51 @@ class EmbeddingMaintainer(threading.Thread):
                         PostProcessDataEnum.tracked_object,
                     )
 
+    def _upgrade_snapshot(self, event: Event) -> None:
+        """Queue the clean snapshot of an event to be replaced from the main stream."""
+        frame_time = event.data.get("snapshot_frame_time")
+
+        if not event.has_snapshot or not frame_time:
+            return
+
+        camera = str(event.camera)
+        camera_config = self.config.cameras.get(camera)
+
+        if camera_config is None or not self.hires.enabled(camera):
+            return
+
+        file = os.path.join(CLIPS_DIR, f"{camera}-{event.id}-clean.webp")
+        snapshot = cv2.imread(file)
+
+        # only a snapshot still at the detect size has not been replaced yet
+        if snapshot is None or snapshot.shape[:2] != camera_config.frame_shape:
+            return
+
+        # the object is what places this moment in the main stream
+        box = relative_box_to_absolute(snapshot.shape, event.data.get("box"))
+        reference = reference_from_bgr(snapshot, box) if box else None
+
+        if reference is None:
+            return
+
+        def upgrade(frame: np.ndarray, scale_x: float, scale_y: float) -> None:
+            if camera not in self.config.cameras:
+                return
+
+            # the clean snapshot is the whole frame, and the boxes drawn over it
+            # are stored relative to the frame size
+            replace_image(
+                file,
+                frame,
+                get_image_quality_params(
+                    "webp", self.config.cameras[camera].snapshots.quality
+                ),
+            )
+
+        self.hires.submit(
+            camera, frame_time, f"snapshot:{event.id}", upgrade, reference
+        )
+
     def _expire_dedicated_lpr(self) -> None:
         """Remove plates not seen for longer than expiration timeout for dedicated lpr cameras."""
         now = datetime.datetime.now().timestamp()
@@ -734,6 +806,9 @@ class EmbeddingMaintainer(threading.Thread):
 
                 self.recordings_available_through[camera] = (
                     recordings_available_through_timestamp
+                )
+                self.hires.update_recordings_available(
+                    camera, recordings_available_through_timestamp
                 )
 
                 logger.debug(
@@ -793,7 +868,7 @@ class EmbeddingMaintainer(threading.Thread):
         if topic is None:
             return
 
-        camera, frame_name, _, _, motion_boxes, _ = data
+        camera, frame_name, frame_time, _, motion_boxes, _ = data
 
         if not camera or camera not in self.config.cameras:
             return
@@ -838,7 +913,12 @@ class EmbeddingMaintainer(threading.Thread):
 
             if isinstance(processor, CustomStateClassificationProcessor):
                 processor.process_frame(
-                    {"camera": camera, "motion": motion_boxes}, yuv_frame
+                    {
+                        "camera": camera,
+                        "motion": motion_boxes,
+                        "frame_time": frame_time,
+                    },
+                    yuv_frame,
                 )
 
         self.frame_manager.close(frame_name)

@@ -73,6 +73,7 @@ export const cameraUpdateTopicMap: Record<string, string> = {
   notifications: "notifications",
   live: "live",
   timestamp_style: "timestamp_style",
+  image_source: "image_source",
   audio_transcription: "audio_transcription",
   birdseye: "birdseye",
   face_recognition: "face_recognition",

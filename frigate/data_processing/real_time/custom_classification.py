@@ -14,6 +14,13 @@ from frigate.comms.inter_process import InterProcessRequestor
 from frigate.config import FrigateConfig
 from frigate.config.classification import CustomClassificationConfig
 from frigate.const import CLIPS_DIR, MODEL_CACHE_DIR
+from frigate.data_processing.common.hires import (
+    Reference,
+    clip_box,
+    reference_from_yuv,
+    replace_image,
+    scale_box,
+)
 from frigate.log import suppress_stderr_during
 from frigate.util.builtin import EventsPerSecond, InferenceSpeed, load_labels
 from frigate.util.file import trim_oldest_files
@@ -285,13 +292,50 @@ class CustomStateClassificationProcessor(DeferredRealtimeProcessorApi):
         # Copy for training image saves on worker thread
         crop_bgr = cv2.cvtColor(cropped_frame, cv2.COLOR_RGB2BGR)
 
-        self._enqueue_task(("classify", camera, now, resized_frame, crop_bgr))
+        self._enqueue_task(
+            (
+                "classify",
+                camera,
+                now,
+                resized_frame,
+                crop_bgr,
+                frame_data.get("frame_time"),
+            )
+        )
+
+    def _upgrade_attempt(
+        self, file: str, camera: str, frame_time: float | None
+    ) -> None:
+        """Queue a saved training image to be replaced from the main stream."""
+        if not self.hires or not frame_time or not self.model_config.state_config:
+            return
+
+        # the crop is a fixed part of the scene, so stream drift does not move
+        # it and the streams are not lined up in time
+        crop = self.model_config.state_config.cameras[camera].crop
+
+        def upgrade(frame: np.ndarray, scale_x: float, scale_y: float) -> None:
+            height, width = frame.shape[:2]
+            left, top, right, bottom = clip_box(
+                (
+                    int(crop[0] * width),
+                    int(crop[1] * height),
+                    int(crop[2] * width),
+                    int(crop[3] * height),
+                ),
+                frame.shape,
+            )
+            replace_image(file, frame[top:bottom, left:right])
+
+        self.hires.submit(
+            camera, frame_time, f"{self.model_config.name}:{camera}", upgrade
+        )
 
     def _process_task(self, task: Any) -> None:
         kind = task[0]
         if kind == "classify":
-            _, camera, timestamp, resized_frame, crop_bgr = task
-            self._classify_state(camera, timestamp, resized_frame, crop_bgr)
+            _, camera, timestamp, resized_frame, crop_bgr, frame_time = task
+            self._classify_state(camera, timestamp, resized_frame, crop_bgr, frame_time)
         elif kind == "reload":
             self.__build_detector()
 
@@ -301,6 +345,7 @@ class CustomStateClassificationProcessor(DeferredRealtimeProcessorApi):
         timestamp: float,
         resized_frame: np.ndarray,
         crop_bgr: np.ndarray,
+        frame_time: float | None = None,
     ) -> None:
         if self.interpreter is None:
             # When interpreter is None, always save (score is 0.0, which is < 1.0)
@@ -310,14 +355,18 @@ class CustomStateClassificationProcessor(DeferredRealtimeProcessorApi):
                     if self.model_config.save_attempts is not None
                     else 100
                 )
-                write_classification_attempt(
-                    self.train_dir,
-                    crop_bgr,
-                    "none-none",
-                    timestamp,
-                    "unknown",
-                    0.0,
-                    max_files=save_attempts,
+                self._upgrade_attempt(
+                    write_classification_attempt(
+                        self.train_dir,
+                        crop_bgr,
+                        "none-none",
+                        timestamp,
+                        "unknown",
+                        0.0,
+                        max_files=save_attempts,
+                    ),
+                    camera,
+                    frame_time,
                 )
             return
 
@@ -346,14 +395,18 @@ class CustomStateClassificationProcessor(DeferredRealtimeProcessorApi):
                 if self.model_config.save_attempts is not None
                 else 100
             )
-            write_classification_attempt(
-                self.train_dir,
-                crop_bgr,
-                "none-none",
-                timestamp,
-                detected_state,
-                score,
-                max_files=save_attempts,
+            self._upgrade_attempt(
+                write_classification_attempt(
+                    self.train_dir,
+                    crop_bgr,
+                    "none-none",
+                    timestamp,
+                    detected_state,
+                    score,
+                    max_files=save_attempts,
+                ),
+                camera,
+                frame_time,
             )
 
         if score < self.model_config.threshold:
@@ -599,14 +652,74 @@ class CustomObjectClassificationProcessor(DeferredRealtimeProcessorApi):
         crop_bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
 
         self._enqueue_task(
-            ("classify", object_id, obj_data["camera"], now, resized_crop, crop_bgr)
+            (
+                "classify",
+                object_id,
+                obj_data["camera"],
+                now,
+                resized_crop,
+                crop_bgr,
+                obj_data.get("frame_time"),
+                (x, y, x2, y2),
+                reference_from_yuv(
+                    frame,
+                    (x, y, x2, y2),
+                    self.config.cameras[obj_data["camera"]].detect.height,
+                ),
+            )
+        )
+
+    def _upgrade_attempt(
+        self,
+        file: str,
+        object_id: str,
+        camera: str,
+        frame_time: float | None,
+        region: tuple[int, int, int, int] | None,
+        reference: Reference | None,
+    ) -> None:
+        """Queue a saved training image to be replaced from the main stream."""
+        if not self.hires or not frame_time or region is None:
+            return
+
+        def upgrade(frame: np.ndarray, scale_x: float, scale_y: float) -> None:
+            left, top, right, bottom = clip_box(
+                scale_box(region, scale_x, scale_y), frame.shape
+            )
+            replace_image(file, frame[top:bottom, left:right])
+
+        self.hires.submit(
+            camera,
+            frame_time,
+            f"{self.model_config.name}:{object_id}",
+            upgrade,
+            reference,
         )
 
     def _process_task(self, task: Any) -> None:
         kind = task[0]
         if kind == "classify":
-            _, object_id, camera, timestamp, resized_crop, crop_bgr = task
-            self._classify_object(object_id, camera, timestamp, resized_crop, crop_bgr)
+            (
+                _,
+                object_id,
+                camera,
+                timestamp,
+                resized_crop,
+                crop_bgr,
+                frame_time,
+                region,
+                reference,
+            ) = task
+            self._classify_object(
+                object_id,
+                camera,
+                timestamp,
+                resized_crop,
+                crop_bgr,
+                frame_time,
+                region,
+                reference,
+            )
         elif kind == "expire":
             _, object_id = task
             if object_id in self.classification_history:
@@ -621,6 +734,9 @@ class CustomObjectClassificationProcessor(DeferredRealtimeProcessorApi):
         timestamp: float,
         resized_crop: np.ndarray,
         crop_bgr: np.ndarray,
+        frame_time: float | None = None,
+        region: tuple[int, int, int, int] | None = None,
+        reference: Reference | None = None,
     ) -> None:
         if self.interpreter is None:
             save_attempts = (
@@ -628,14 +744,21 @@ class CustomObjectClassificationProcessor(DeferredRealtimeProcessorApi):
                 if self.model_config.save_attempts is not None
                 else 200
             )
-            write_classification_attempt(
-                self.train_dir,
-                crop_bgr,
+            self._upgrade_attempt(
+                write_classification_attempt(
+                    self.train_dir,
+                    crop_bgr,
+                    object_id,
+                    timestamp,
+                    "unknown",
+                    0.0,
+                    max_files=save_attempts,
+                ),
                 object_id,
-                timestamp,
-                "unknown",
-                0.0,
-                max_files=save_attempts,
+                camera,
+                frame_time,
+                region,
+                reference,
             )
 
             # Still track history even when model doesn't exist to respect MAX_OBJECT_CLASSIFICATIONS
@@ -668,14 +791,21 @@ class CustomObjectClassificationProcessor(DeferredRealtimeProcessorApi):
             if self.model_config.save_attempts is not None
             else 200
         )
-        write_classification_attempt(
-            self.train_dir,
-            crop_bgr,
+        self._upgrade_attempt(
+            write_classification_attempt(
+                self.train_dir,
+                crop_bgr,
+                object_id,
+                timestamp,
+                self.labelmap[best_id],
+                score,
+                max_files=save_attempts,
+            ),
             object_id,
-            timestamp,
-            self.labelmap[best_id],
-            score,
-            max_files=save_attempts,
+            camera,
+            frame_time,
+            region,
+            reference,
         )
 
         if score < self.model_config.threshold:
@@ -748,7 +878,8 @@ def write_classification_attempt(
     label: str,
     score: float,
     max_files: int = 100,
-) -> None:
+) -> str:
+    """Save a classification attempt and return the file it was written to."""
     if "-" in label:
         label = label.replace("-", "_")
 
@@ -756,3 +887,4 @@ def write_classification_attempt(
     os.makedirs(folder, exist_ok=True)
     cv2.imwrite(file, frame)
     trim_oldest_files(folder, max_files)
+    return file

@@ -44,6 +44,7 @@ import semanticSearch from "./section-configs/semantic_search";
 import snapshots from "./section-configs/snapshots";
 import telemetry from "./section-configs/telemetry";
 import timestampStyle from "./section-configs/timestamp_style";
+import imageSource from "./section-configs/image_source";
 import tls from "./section-configs/tls";
 import ui from "./section-configs/ui";
 
@@ -57,6 +58,7 @@ export const sectionConfigs: Record<string, SectionConfigOverrides> = {
   audio,
   live,
   timestamp_style: timestampStyle,
+  image_source: imageSource,
   notifications,
   onvif,
   ffmpeg,

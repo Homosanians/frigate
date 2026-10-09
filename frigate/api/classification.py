@@ -29,7 +29,6 @@ from frigate.api.defs.response.classification_response import (
 from frigate.api.defs.response.generic_response import GenericResponse
 from frigate.api.defs.tags import Tags
 from frigate.config import FrigateConfig
-from frigate.config.camera import DetectConfig
 from frigate.config.classification import ObjectClassificationType
 from frigate.const import CLIPS_DIR, FACE_DIR, MODEL_CACHE_DIR
 from frigate.embeddings import EmbeddingsContext
@@ -214,15 +213,15 @@ def train_face(request: Request, name: str, body: dict = None):
 
         snapshot = get_event_snapshot(event)
         face_box = event.data["attributes"][0]["box"]
-        detect_config: DetectConfig = request.app.frigate_config.cameras[
-            event.camera
-        ].detect
+        # the snapshot may come from the main stream, so the relative box is
+        # scaled by the snapshot's own size rather than the detect resolution
+        snapshot_height, snapshot_width = snapshot.shape[:2]
 
         # crop onto the face box minus the bounding box itself
-        x1 = int(face_box[0] * detect_config.width) + 2
-        y1 = int(face_box[1] * detect_config.height) + 2
-        x2 = x1 + int(face_box[2] * detect_config.width) - 4
-        y2 = y1 + int(face_box[3] * detect_config.height) - 4
+        x1 = int(face_box[0] * snapshot_width) + 2
+        y1 = int(face_box[1] * snapshot_height) + 2
+        x2 = x1 + int(face_box[2] * snapshot_width) - 4
+        y2 = y1 + int(face_box[3] * snapshot_height) - 4
         face = snapshot[y1:y2, x1:x2]
         success = True
 

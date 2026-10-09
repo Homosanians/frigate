@@ -66,6 +66,7 @@
     "globalReview": "Review",
     "globalAudioEvents": "Audio detection",
     "globalLivePlayback": "Live playback",
+    "globalImageSource": "Image source",
     "globalTimestampStyle": "Timestamp style",
     "systemDatabase": "Database",
     "systemTls": "TLS",
@@ -104,6 +105,7 @@
     "cameraMqttConfig": "MQTT",
     "cameraOnvif": "ONVIF",
     "cameraUi": "Camera UI",
+    "cameraImageSource": "Image source",
     "cameraTimestampStyle": "Timestamp style",
     "cameraMqtt": "Camera MQTT",
     "cameraManagement": "Camera management",
@@ -659,6 +661,7 @@
           "notifications": "Notifications",
           "birdseye": "Birdseye",
           "mqtt": "MQTT",
+          "image_source": "Image source",
           "timestamp_style": "Timestamp style",
           "onvif": "ONVIF",
           "lpr": "License plate recognition",
@@ -1030,6 +1033,11 @@
       "ratio": "Ratio",
       "area": "Area"
     }
+  },
+  "imageSourceStream": {
+    "detect": "Detect stream",
+    "main": "Main stream",
+    "auto": "Highest resolution"
   },
   "timestampPosition": {
     "tl": "Top left",
@@ -1650,6 +1658,7 @@
       "audio": "Audio",
       "notifications": "Notifications",
       "live": "Live View",
+      "image_source": "Image source",
       "timestamp_style": "Timestamps",
       "mqtt": "MQTT",
       "database": "Database",
@@ -1751,6 +1760,9 @@
     },
     "live": {
       "title": "Live View Settings"
+    },
+    "image_source": {
+      "title": "Image Source Settings"
     },
     "timestamp_style": {
       "title": "Timestamp Settings"

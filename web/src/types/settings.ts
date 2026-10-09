@@ -28,6 +28,7 @@ export const settingsViewGroups = [
       "globalAudioEvents",
       "globalLivePlayback",
       "globalTimestampStyle",
+      "globalImageSource",
     ],
   },
   {
@@ -52,6 +53,7 @@ export const settingsViewGroups = [
       "cameraOnvif",
       "cameraMqttConfig",
       "cameraTimestampStyle",
+      "cameraImageSource",
     ],
   },
   {

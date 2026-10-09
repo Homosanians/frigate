@@ -32,6 +32,7 @@ from .audio import AudioConfig
 from .birdseye import BirdseyeCameraConfig
 from .detect import DetectConfig
 from .ffmpeg import CameraFfmpegConfig, CameraInput
+from .image_source import ImageSourceConfig
 from .live import CameraLiveConfig
 from .motion import MotionConfig
 from .mqtt import CameraMqttConfig
@@ -106,6 +107,11 @@ class CameraConfig(FrigateBaseModel):
     ffmpeg: CameraFfmpegConfig = Field(
         title="Streams (FFmpeg)",
         description="Camera stream inputs and FFmpeg options, including binary path, args, hwaccel, and per-role output args.",
+    )
+    image_source: ImageSourceConfig = Field(
+        default_factory=ImageSourceConfig,
+        title="Image source",
+        description="Which stream saved images are taken from for this camera.",
     )
     live: CameraLiveConfig = Field(
         default_factory=CameraLiveConfig,

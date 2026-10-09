@@ -9,6 +9,7 @@ import os
 import random
 import re
 import string
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,11 @@ from frigate.comms.inter_process import InterProcessRequestor
 from frigate.config import FrigateConfig
 from frigate.config.classification import LicensePlateRecognitionConfig
 from frigate.const import CLIPS_DIR, MODEL_CACHE_DIR
+from frigate.data_processing.common.hires import (
+    expand_box,
+    reference_from_yuv,
+    scale_box,
+)
 from frigate.data_processing.common.license_plate.model import LicensePlateModelRunner
 from frigate.embeddings.onnx.lpr_embedding import LPR_EMBEDDING_SIZE
 from frigate.types import TrackedObjectUpdateTypesEnum
@@ -37,6 +43,11 @@ from ...types import DataProcessorMetrics
 logger = logging.getLogger(__name__)
 
 WRITE_DEBUG_IMAGES = False
+
+# padding around a scaled plate box to absorb drift between the streams
+HIRES_PLATE_PAD = 0.3
+# ended objects remembered so a late main stream reading can still update them
+MAX_EXPIRED_PLATES = 256
 
 
 class LicensePlateProcessingMixin:
@@ -85,6 +96,9 @@ class LicensePlateProcessingMixin:
         # matching
         self.similarity_threshold = 0.8
         self.cluster_threshold = 0.85
+
+        # best confidence published for objects that have ended
+        self.expired_plates: OrderedDict[str, float] = OrderedDict()
 
     def _detect(self, image: np.ndarray, debug_frame_id: int) -> list[np.ndarray]:
         """
@@ -1495,6 +1509,27 @@ class LicensePlateProcessingMixin:
         self.plates_rec_second.update()
         self.plate_rec_speed.update(datetime.datetime.now().timestamp() - start)
 
+        hires = getattr(self, "hires", None)
+
+        if (
+            hires
+            and not dedicated_lpr
+            and obj_data.get("frame_time")
+            and obj_data.get("box")
+        ):
+            hires.submit(
+                camera,
+                obj_data["frame_time"],
+                f"lpr:{id}",
+                lambda hires_frame, scale_x, scale_y: self.lpr_process_hires(
+                    id, camera, plate_box, obj_data, hires_frame, scale_x, scale_y
+                ),
+                # the vehicle is what places this moment in the main stream
+                reference_from_yuv(
+                    frame, obj_data["box"], self.config.cameras[camera].detect.height
+                ),
+            )
+
         if license_plates:
             for plate, confidence, text_area in zip(license_plates, confidences, areas):
                 avg_confidence = (
@@ -1569,6 +1604,56 @@ class LicensePlateProcessingMixin:
 
             id = plate_id
 
+        rep_plate = self._update_plate(
+            id,
+            camera,
+            top_plate,
+            avg_confidence,
+            top_char_confidences,
+            top_area,
+            current_time,
+            start,
+            plate_box,
+            dedicated_lpr,
+            obj_data,
+        )
+
+        if rep_plate is None:
+            return
+
+        # save the best snapshot for dedicated lpr cams not using frigate+
+        if (
+            dedicated_lpr
+            and "license_plate" not in self.config.cameras[camera].objects.track
+        ):
+            logger.debug(
+                f"{camera}: Writing snapshot for {id}, {rep_plate}, {current_time}"
+            )
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
+            _, encoded_img = cv2.imencode(".jpg", frame_bgr)
+            self.sub_label_publisher.publish(
+                (base64.b64encode(encoded_img.tobytes()).decode("ASCII"), id, camera),
+                EventMetadataTypeEnum.save_lpr_snapshot.value,
+            )
+
+    def _update_plate(
+        self,
+        id: str,
+        camera: str,
+        top_plate: str,
+        avg_confidence: float,
+        top_char_confidences: list[float],
+        top_area: int,
+        current_time: int,
+        start: float,
+        plate_box: tuple[int, int, int, int],
+        dedicated_lpr: bool,
+        obj_data: Any,
+    ) -> str | None:
+        """Cluster a reading with the earlier ones of an object and publish the result.
+
+        Returns the plate the object is now known by, or None if it was filtered.
+        """
         is_new = id not in self.detected_license_plates
 
         # Collect variant
@@ -1605,7 +1690,7 @@ class LicensePlateProcessingMixin:
         # readings, so noisy variants still contribute to clustering even
         # when they don't pass on their own
         if not self._passes_plate_filters(camera, rep_plate):
-            return
+            return None
 
         # Update stored rep
         self.detected_license_plates[id].update(
@@ -1625,6 +1710,19 @@ class LicensePlateProcessingMixin:
                 self.camera_current_cars[camera] = []
             self.camera_current_cars[camera].append(id)
 
+        self._publish_plate(id, camera, rep_plate, rep_conf, start, plate_box)
+        return rep_plate
+
+    def _publish_plate(
+        self,
+        id: str,
+        camera: str,
+        plate: str,
+        conf: float,
+        start: float,
+        plate_box: tuple[int, int, int, int],
+    ) -> None:
+        """Publish a plate for an object, labeling it if the plate is known."""
         # Determine subLabel based on known plates, use regex matching
         # Default to the detected plate, use label name if there's a match
         sub_label = None
@@ -1634,10 +1732,10 @@ class LicensePlateProcessingMixin:
                     label
                     for label, plates_list in self.lpr_config.known_plates.items()  # type: ignore[union-attr]
                     if any(
-                        re.match(f"^{plate}$", rep_plate)
-                        or Levenshtein.distance(plate, rep_plate)
+                        re.match(f"^{known_plate}$", plate)
+                        or Levenshtein.distance(known_plate, plate)
                         <= self.lpr_config.match_distance
-                        for plate in plates_list
+                        for known_plate in plates_list
                     )
                 ),
                 None,
@@ -1650,7 +1748,7 @@ class LicensePlateProcessingMixin:
         # If it's a known plate, publish to sub_label
         if sub_label is not None:
             self.sub_label_publisher.publish(
-                (id, sub_label, rep_conf), EventMetadataTypeEnum.sub_label.value
+                (id, sub_label, conf), EventMetadataTypeEnum.sub_label.value
             )
 
         # always publish to recognized_license_plate field
@@ -1660,8 +1758,8 @@ class LicensePlateProcessingMixin:
                 {
                     "type": TrackedObjectUpdateTypesEnum.lpr,
                     "name": sub_label,
-                    "plate": rep_plate,
-                    "score": rep_conf,
+                    "plate": plate,
+                    "score": conf,
                     "id": id,
                     "camera": camera,
                     "timestamp": start,
@@ -1670,24 +1768,86 @@ class LicensePlateProcessingMixin:
             ),
         )
         self.sub_label_publisher.publish(
-            (id, "recognized_license_plate", rep_plate, rep_conf),
+            (id, "recognized_license_plate", plate, conf),
             EventMetadataTypeEnum.attribute.value,
         )
 
-        # save the best snapshot for dedicated lpr cams not using frigate+
+    def lpr_process_hires(
+        self,
+        id: str,
+        camera: str,
+        plate_box: tuple[int, int, int, int],
+        obj_data: dict[str, Any],
+        frame: np.ndarray,
+        scale_x: float,
+        scale_y: float,
+    ) -> None:
+        """Read a plate again from the main stream frame of an earlier detection."""
         if (
-            dedicated_lpr
-            and "license_plate" not in self.config.cameras[camera].objects.track
+            camera not in self.config.cameras
+            or not self.config.cameras[camera].lpr.enabled
         ):
-            logger.debug(
-                f"{camera}: Writing snapshot for {id}, {rep_plate}, {current_time}"
-            )
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
-            _, encoded_img = cv2.imencode(".jpg", frame_bgr)
-            self.sub_label_publisher.publish(
-                (base64.b64encode(encoded_img.tobytes()).decode("ASCII"), id, camera),
-                EventMetadataTypeEnum.save_lpr_snapshot.value,
-            )
+            return
+
+        # the padding is tolerated because OCR locates the text itself
+        left, top, right, bottom = expand_box(
+            scale_box(plate_box, scale_x, scale_y), frame.shape, HIRES_PLATE_PAD
+        )
+        plate_frame = frame[top:bottom, left:right]
+
+        if plate_frame.size == 0:
+            return
+
+        start = datetime.datetime.now().timestamp()
+        license_plates, confidences, areas = self._process_license_plate(
+            camera, id, plate_frame, int(start * 1000)
+        )
+
+        if not license_plates:
+            logger.debug(f"{camera}: No text detected in main stream frame for {id}")
+            return
+
+        top_plate, top_char_confidences, top_area = (
+            license_plates[0],
+            confidences[0],
+            areas[0],
+        )
+        avg_confidence = (
+            (sum(top_char_confidences) / len(top_char_confidences))
+            if top_char_confidences
+            else 0
+        )
+        logger.debug(
+            f"{camera}: Main stream text for {id}: {top_plate} (average confidence: {avg_confidence:.2f})"
+        )
+
+        if avg_confidence < self.lpr_config.recognition_threshold:
+            return
+
+        if id in self.expired_plates:
+            # the object has ended, so there are no readings left to cluster with
+            if avg_confidence <= self.expired_plates[
+                id
+            ] or not self._passes_plate_filters(camera, top_plate):
+                return
+
+            self.expired_plates[id] = avg_confidence
+            self._publish_plate(id, camera, top_plate, avg_confidence, start, plate_box)
+            return
+
+        self._update_plate(
+            id,
+            camera,
+            top_plate,
+            avg_confidence,
+            top_char_confidences,
+            top_area,
+            int(start),
+            start,
+            plate_box,
+            False,
+            obj_data,
+        )
 
     def handle_request(
         self, topic: str, request_data: dict[str, Any]
@@ -1695,11 +1855,23 @@ class LicensePlateProcessingMixin:
         return None
 
     def lpr_expire(self, object_id: str, camera: str) -> None:
+        char_confidences: list[float] = []
+
         if object_id in self.detected_license_plates:
-            self.detected_license_plates.pop(object_id)
+            char_confidences = (
+                self.detected_license_plates.pop(object_id).get("char_confidences")
+                or []
+            )
 
             if object_id in self.camera_current_cars.get(camera, []):
                 self.camera_current_cars[camera].remove(object_id)
+
+        self.expired_plates[object_id] = (
+            sum(char_confidences) / len(char_confidences) if char_confidences else 0.0
+        )
+
+        while len(self.expired_plates) > MAX_EXPIRED_PLATES:
+            self.expired_plates.popitem(last=False)
 
 
 class CTCDecoder:

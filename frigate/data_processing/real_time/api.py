@@ -13,12 +13,16 @@ import numpy as np
 
 from frigate.config import FrigateConfig
 
+from ..common.hires import HiResUpgrader
 from ..types import DataProcessorMetrics
 
 logger = logging.getLogger(__name__)
 
 
 class RealTimeProcessorApi(ABC):
+    # set by the maintainer, swaps saved detect crops for main stream ones
+    hires: HiResUpgrader | None = None
+
     @abstractmethod
     def __init__(
         self,

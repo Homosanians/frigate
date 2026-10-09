@@ -475,6 +475,7 @@ export const OVERRIDABLE_SECTIONS: ReadonlyArray<{
   { key: "notifications" },
   { key: "live" },
   { key: "timestamp_style" },
+  { key: "image_source" },
   {
     key: "audio_transcription",
     compareFields: ["enabled", "live_enabled"],

@@ -307,6 +307,12 @@ export interface CameraConfig {
     };
     timestamp: boolean;
   };
+  image_source: {
+    stream: "detect" | "main" | "auto";
+    match_threshold: number;
+    search_before: number;
+    search_after: number;
+  };
   timestamp_style: {
     color: {
       blue: number;
@@ -669,6 +675,13 @@ export interface FrigateConfig {
       network_bandwidth: boolean;
     };
     version_check: boolean;
+  };
+
+  image_source: {
+    stream: "detect" | "main" | "auto";
+    match_threshold: number;
+    search_before: number;
+    search_after: number;
   };
 
   timestamp_style: {

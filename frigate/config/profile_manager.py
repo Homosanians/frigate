@@ -26,6 +26,7 @@ PROFILE_SECTION_UPDATES: dict[str, CameraConfigUpdateEnum] = {
     "birdseye": CameraConfigUpdateEnum.birdseye,
     "detect": CameraConfigUpdateEnum.detect,
     "face_recognition": CameraConfigUpdateEnum.face_recognition,
+    "image_source": CameraConfigUpdateEnum.image_source,
     "lpr": CameraConfigUpdateEnum.lpr,
     "motion": CameraConfigUpdateEnum.motion,
     "notifications": CameraConfigUpdateEnum.notifications,
