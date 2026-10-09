@@ -18,6 +18,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from onvif import ONVIFError
+
 from frigate.camera import PTZMetrics
 from frigate.config import FrigateConfig
 from frigate.ptz.autotrack import ptz_moving_at_frame_time
@@ -499,6 +501,138 @@ class TestPresetManagement(unittest.IsolatedAsyncioTestCase):
         ptz.SetHomePosition.assert_awaited_once_with({"ProfileToken": "profile_1"})
         ptz.GotoHomePosition.assert_awaited_once_with({"ProfileToken": "profile_1"})
         self.assertFalse(controller.cams[CAMERA]["active"])
+
+
+def _make_no_ptz_controller(no_ptz_service: bool) -> OnvifController:
+    """A fixed camera configured for ONVIF, for its device info and time sync.
+    Its device either has no PTZ service, or has one that no media profile uses."""
+    controller = _make_controller(autotracking_enabled=False)
+    controller.max_retries = 5
+    controller.reset_timeout = 900
+    controller.status_locks = {CAMERA: asyncio.Lock()}
+    controller.ptz_metrics = {CAMERA: PTZMetrics()}
+    # the state _init_single_camera creates
+    controller.cams[CAMERA].update(
+        {
+            "active": False,
+            "features": [],
+            "presets": {},
+            "preset_details": [],
+            "max_presets": None,
+            "profiles": [],
+        }
+    )
+    onvif = controller.cams[CAMERA]["onvif"]
+
+    if no_ptz_service:
+        onvif.get_definition.side_effect = ONVIFError(
+            "Device doesn`t support service: ptz"
+        )
+    else:
+        profile = _make_profile()
+        profile.PTZConfiguration = None
+        onvif.create_media_service.return_value.GetProfiles = AsyncMock(
+            return_value=[profile]
+        )
+
+    return controller
+
+
+class TestCameraWithoutPtz(unittest.IsolatedAsyncioTestCase):
+    """The live view requests PTZ info for every camera with an ONVIF host, so a
+    camera without PTZ must be reported as such instead of failing to initialize
+    and being retried with errors on every visit."""
+
+    async def test_info_reports_no_features(self) -> None:
+        for no_ptz_service in (True, False):
+            with self.subTest(no_ptz_service=no_ptz_service):
+                controller = _make_no_ptz_controller(no_ptz_service)
+
+                with self.assertNoLogs("frigate.ptz.onvif", level="WARNING"):
+                    info = await controller.get_camera_info(CAMERA)
+
+                self.assertEqual(
+                    info,
+                    {
+                        "name": CAMERA,
+                        "features": [],
+                        "presets": [],
+                        "preset_details": [],
+                        "max_presets": None,
+                        "profiles": [],
+                    },
+                )
+                self.assertEqual(controller.failed_cams, {})
+                onvif = controller.cams[CAMERA]["onvif"]
+                onvif.create_ptz_service.assert_not_awaited()
+
+    async def test_not_retried(self) -> None:
+        for no_ptz_service in (True, False):
+            with self.subTest(no_ptz_service=no_ptz_service):
+                controller = _make_no_ptz_controller(no_ptz_service)
+
+                for _ in range(controller.max_retries + 1):
+                    info = await controller.get_camera_info(CAMERA)
+                    self.assertEqual(info.get("features"), [])
+
+                controller.cams[CAMERA]["onvif"].update_xaddrs.assert_awaited_once()
+
+    async def test_ptz_commands_ignored(self) -> None:
+        for no_ptz_service in (True, False):
+            with self.subTest(no_ptz_service=no_ptz_service):
+                controller = _make_no_ptz_controller(no_ptz_service)
+                await controller.get_camera_info(CAMERA)
+
+                with self.assertNoLogs("frigate.ptz.onvif", level="WARNING"):
+                    for command in OnvifCommandEnum:
+                        await controller.handle_command_async(CAMERA, command)
+
+                controller.cams[CAMERA]["onvif"].update_xaddrs.assert_awaited_once()
+
+    async def test_preset_management_rejected(self) -> None:
+        for no_ptz_service in (True, False):
+            with self.subTest(no_ptz_service=no_ptz_service):
+                controller = _make_no_ptz_controller(no_ptz_service)
+
+                with self.assertRaises(OnvifRequestError):
+                    await controller.set_preset(CAMERA, "Porch")
+
+                with self.assertRaises(OnvifRequestError):
+                    await controller.remove_preset(CAMERA, "1")
+
+                with self.assertRaises(OnvifRequestError):
+                    await controller.set_home(CAMERA)
+
+    async def test_camera_status_without_ptz(self) -> None:
+        for no_ptz_service in (True, False):
+            with self.subTest(no_ptz_service=no_ptz_service):
+                controller = _make_no_ptz_controller(no_ptz_service)
+                await controller.get_camera_info(CAMERA)
+
+                with self.assertNoLogs("frigate.ptz.onvif", level="WARNING"):
+                    await controller.get_camera_status(
+                        CAMERA, source=PtzSource.autotrack
+                    )
+
+                metrics = controller.ptz_metrics[CAMERA]
+                self.assertTrue(metrics.motor_stopped.is_set())
+
+    async def test_debug_snapshot_without_ptz(self) -> None:
+        # the PTZ log in the Debug view polls every camera with an ONVIF host
+        for no_ptz_service in (True, False):
+            with self.subTest(no_ptz_service=no_ptz_service):
+                controller = _make_no_ptz_controller(no_ptz_service)
+                controller.debug_reads = set()
+                controller.event_log = PtzEventLog()
+                await controller.get_camera_info(CAMERA)
+                controller._ptz_request = AsyncMock()
+
+                snapshot = await controller.debug_snapshot(CAMERA, 0)
+
+                self.assertTrue(snapshot["connected"])
+                self.assertEqual(snapshot["capabilities"]["features"], [])
+                self.assertIsNone(snapshot["status"])
+                controller._ptz_request.assert_not_called()
 
 
 class TestOnvifClose(unittest.TestCase):

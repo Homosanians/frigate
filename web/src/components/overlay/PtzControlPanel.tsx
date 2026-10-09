@@ -74,6 +74,9 @@ export default function PtzControlPanel({
     isAdmin &&
     !!ptz?.preset_details &&
     (ptz.features.includes("pt") || ptz.features.includes("zoom"));
+  // a camera with ONVIF but no PTZ reports no features, while one that failed
+  // to initialize reports nothing and is retried by the next command
+  const noPtz = ptz?.features?.length === 0;
 
   const onStop = useCallback(
     (e: React.SyntheticEvent) => {
@@ -102,6 +105,10 @@ export default function PtzControlPanel({
       "9",
     ],
     (key, modifiers) => {
+      if (noPtz) {
+        return false;
+      }
+
       if (modifiers.repeat || !key) {
         return true;
       }
@@ -153,6 +160,10 @@ export default function PtzControlPanel({
       return false;
     },
   );
+
+  if (noPtz) {
+    return null;
+  }
 
   return (
     <div

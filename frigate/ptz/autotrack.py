@@ -558,6 +558,12 @@ class PtzAutoTracker(threading.Thread):
                 self._disable(camera, "ONVIF MoveStatus not supported")
                 return
 
+        # a camera without PTZ stays initialized after the live view or an
+        # earlier setup, so setup can find it initialized already
+        elif "pt-r-fov" not in self.onvif.cams[camera]["features"]:
+            self._disable(camera, "FOV relative movement not supported")
+            return
+
         if self.onvif.cams[camera]["init"]:
             await self.onvif.get_camera_status(camera, source=self._source(camera))
 

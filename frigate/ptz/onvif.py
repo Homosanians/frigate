@@ -569,11 +569,8 @@ class OnvifController:
             # this will fire an exception if camera is not a ptz
             capabilities = onvif.get_definition("ptz")
             logger.debug(f"Onvif capabilities for {camera_name}: {capabilities}")
-        except Exception as e:
-            logger.error(
-                f"Unable to get Onvif capabilities for camera: {camera_name}: {e}"
-            )
-            return False
+        except Exception:
+            return self._init_without_ptz(camera_name, "no PTZ service")
 
         try:
             profiles = await media.GetProfiles()
@@ -609,6 +606,11 @@ class OnvifController:
                 p.token,
             )
 
+        if not valid_profiles:
+            return self._init_without_ptz(
+                camera_name, "no media profile supports continuous pan/tilt or zoom"
+            )
+
         configured_profile = camera_config.onvif.profile
 
         if configured_profile is not None:
@@ -636,13 +638,7 @@ class OnvifController:
                 return False
         else:
             # use the first profile that has a valid ptz configuration
-            profile = valid_profiles[0] if valid_profiles else None
-
-        if profile is None:
-            logger.error(
-                f"No appropriate Onvif profiles found for camera: {camera_name}."
-            )
-            return False
+            profile = valid_profiles[0]
 
         logger.debug(f"Selected Onvif profile for {camera_name}: {profile}")
 
@@ -983,6 +979,17 @@ class OnvifController:
 
         event_log.record(camera_name, PtzSource.frigate, "connection", data)
 
+    def _init_without_ptz(self, camera_name: str, reason: str) -> bool:
+        """Mark a camera whose ONVIF device has no PTZ as initialized, so it is
+        reported without PTZ features instead of retried as a failure. It can
+        still be configured for ONVIF device info and time sync."""
+        logger.info(f"{camera_name} does not support ONVIF PTZ: {reason}")
+        cam = self.cams[camera_name]
+        cam["ptz"] = None
+        cam["features"] = []
+        cam["init"] = True
+        return True
+
     async def _stop(self, camera_name: str) -> None:
         cam = self.cams[camera_name]
         move_request = cam["move_request"]
@@ -1265,6 +1272,9 @@ class OnvifController:
         ):
             raise OnvifUnavailableError(f"ONVIF failed to initialize for {camera_name}")
 
+        if self.cams[camera_name]["ptz"] is None:
+            raise OnvifRequestError(f"{camera_name} does not support ONVIF PTZ")
+
         return self.cams[camera_name]
 
     async def set_preset(
@@ -1515,6 +1525,8 @@ class OnvifController:
             if command == OnvifCommandEnum.init:
                 # already init
                 return
+            elif self.cams[camera_name]["ptz"] is None:
+                logger.debug(f"{camera_name} does not support ONVIF PTZ")
             elif command == OnvifCommandEnum.stop:
                 await self._stop(camera_name)
             elif command == OnvifCommandEnum.preset:
@@ -1663,7 +1675,8 @@ class OnvifController:
         # connecting is left to the PTZ controls, which retry with a backoff
         connected = bool(cam and cam["init"])
 
-        if connected:
+        # a camera without PTZ has no status to read
+        if connected and cam["ptz"] is not None:
             await self._refresh_debug_status(event_log, camera_name)
 
         status, _ = event_log.latest_status(camera_name)
@@ -1966,6 +1979,9 @@ class OnvifController:
             if not cam["init"]:
                 if not await self._init_onvif(camera_name):
                     return
+
+            if cam["ptz"] is None:
+                return
 
             try:
                 status = await self._ptz_request(

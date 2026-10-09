@@ -753,6 +753,32 @@ class TestBackgroundCalibration(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tracker.calibrating[CAMERA])
 
 
+class TestAutotrackerSetupWithoutPtz(unittest.IsolatedAsyncioTestCase):
+    async def test_disabled_when_already_initialized_without_ptz(self) -> None:
+        # a camera without PTZ stays initialized after the live view or an earlier
+        # setup, so autotracking turned on again must still check for PTZ support
+        tracker = _make_tracker()
+        tracker.tracked_object_history = {}
+        tracker.tracked_object_metrics = {}
+        tracker.move_metrics = {}
+        tracker.intercept = {}
+        tracker.move_coefficients = {}
+        tracker.move_queues = {}
+        tracker.move_queue_locks = {}
+        tracker.onvif.cams = {CAMERA: {"init": True, "features": []}}
+        tracker.onvif.get_camera_status = AsyncMock()
+        tracker.onvif.loop = asyncio.get_running_loop()
+        tracker._process_move_queue = AsyncMock()
+        camera_config = tracker.config.cameras[CAMERA]
+
+        await tracker._autotracker_setup(camera_config, CAMERA)
+
+        self.assertFalse(camera_config.onvif.autotracking.enabled)
+        self.assertFalse(tracker.autotracker_init.get(CAMERA))
+        tracker.onvif.get_camera_status.assert_not_awaited()
+        tracker._process_move_queue.assert_not_called()
+
+
 class TestReturnToPreset(unittest.IsolatedAsyncioTestCase):
     async def test_return_is_timed_like_a_move(self) -> None:
         # the video keeps showing the return after the camera reports it done,
