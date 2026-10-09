@@ -355,7 +355,8 @@ function InfoRow({ label, children }: InfoRowProps) {
   return (
     <div className="flex flex-row justify-between gap-3">
       <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="text-end">{children}</span>
+      {/* values like a POSIX timezone have no spaces to wrap at */}
+      <span className="min-w-0 break-words text-end">{children}</span>
     </div>
   );
 }
