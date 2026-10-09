@@ -1,13 +1,17 @@
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
 import useSWR from "swr";
-import { AxiosError } from "axios";
+import axios, { AxiosError } from "axios";
 import { useTranslation } from "react-i18next";
 import { LuRefreshCw } from "react-icons/lu";
+import { toast } from "sonner";
 import ActivityIndicator from "@/components/indicators/activity-indicator";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { use24HourTime, useFormattedTimestamp } from "@/hooks/use-date-utils";
+import { useIsAdmin } from "@/hooks/use-is-admin";
 import { cn } from "@/lib/utils";
+import { FrigateConfig } from "@/types/frigateConfig";
 import { OnvifDeviceInfo } from "@/types/ptz";
 
 // clocks this far apart break ONVIF authentication on many cameras
@@ -179,6 +183,12 @@ export default function OnvifDebugInfo({ cameraName }: OnvifDebugInfoProps) {
             </>
           )}
         </InfoSection>
+
+        <TimeSyncSection
+          cameraName={cameraName}
+          timeSync={data.time_sync}
+          onSynced={() => mutate()}
+        />
       </>
     );
   }
@@ -202,6 +212,120 @@ export default function OnvifDebugInfo({ cameraName }: OnvifDebugInfoProps) {
       </div>
       {content}
     </div>
+  );
+}
+
+type TimeSyncSectionProps = {
+  cameraName: string;
+  timeSync: OnvifDeviceInfo["time_sync"];
+  onSynced: () => void;
+};
+
+function TimeSyncSection({
+  cameraName,
+  timeSync,
+  onSynced,
+}: TimeSyncSectionProps) {
+  const { t } = useTranslation(["views/settings", "common"]);
+  const { data: config } = useSWR<FrigateConfig>("config");
+  const isAdmin = useIsAdmin();
+  const is24Hour = use24HourTime(config);
+  const [syncing, setSyncing] = useState(false);
+
+  const lastResult = timeSync.last_result;
+  const lastResultTime = useFormattedTimestamp(
+    lastResult?.time ?? 0,
+    is24Hour
+      ? t("time.formattedTimestampMonthDayHourMinute.24hour", { ns: "common" })
+      : t("time.formattedTimestampMonthDayHourMinute.12hour", { ns: "common" }),
+    config?.ui.timezone,
+  );
+
+  const notSet = (
+    <span className="text-muted-foreground">
+      {t("debug.onvif.timeSync.notSet")}
+    </span>
+  );
+
+  const syncTime = async () => {
+    setSyncing(true);
+
+    try {
+      await axios.post(`${cameraName}/onvif/time_sync`);
+      toast.success(t("debug.onvif.timeSync.toast.success"), {
+        position: "top-center",
+      });
+    } catch (error) {
+      const axiosError = error as AxiosError<{ message?: string }>;
+      toast.error(
+        t("debug.onvif.timeSync.toast.error", {
+          message: axiosError.response?.data?.message ?? axiosError.message,
+        }),
+        { position: "top-center" },
+      );
+    } finally {
+      setSyncing(false);
+      onSynced();
+    }
+  };
+
+  return (
+    <InfoSection
+      title={t("debug.onvif.timeSync.title")}
+      desc={t("debug.onvif.timeSync.desc")}
+    >
+      {!timeSync.enabled ? (
+        <span className="text-muted-foreground">
+          {t("debug.onvif.timeSync.disabled")}
+        </span>
+      ) : (
+        <>
+          <InfoRow label={t("debug.onvif.timeSync.ntpServer")}>
+            {timeSync.ntp_server ?? notSet}
+          </InfoRow>
+          <InfoRow label={t("debug.onvif.timeSync.timezone")}>
+            {timeSync.timezone ? (
+              <>
+                {timeSync.timezone}{" "}
+                <span className="font-mono text-muted-foreground">
+                  ({timeSync.posix_timezone})
+                </span>
+              </>
+            ) : (
+              notSet
+            )}
+          </InfoRow>
+          <InfoRow label={t("debug.onvif.timeSync.lastResult")}>
+            {lastResult == null ? (
+              <span className="text-muted-foreground">
+                {t("debug.onvif.timeSync.notApplied")}
+              </span>
+            ) : lastResult.success ? (
+              t("debug.onvif.timeSync.applied", { time: lastResultTime })
+            ) : (
+              <span className="text-danger">
+                {t("debug.onvif.timeSync.failed", {
+                  time: lastResultTime,
+                  message: lastResult.message,
+                })}
+              </span>
+            )}
+          </InfoRow>
+          {isAdmin && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-1 self-start"
+              disabled={syncing || (!timeSync.ntp_server && !timeSync.timezone)}
+              onClick={syncTime}
+            >
+              {syncing && <ActivityIndicator className="mr-2" size={16} />}
+              {t("debug.onvif.timeSync.syncNow")}
+            </Button>
+          )}
+        </>
+      )}
+    </InfoSection>
   );
 }
 

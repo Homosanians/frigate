@@ -491,6 +491,13 @@ def main():
             }
             section_data.update(nested_without_root)
 
+            # a top-level section of the same name keeps its own label and
+            # description, which describe the global settings page
+            root_section = global_translations.get(config_name, {})
+            for key in ("label", "description"):
+                if key in root_section:
+                    section_data[key] = root_section[key]
+
             # Add camera-level section into global translations (do not write separate file)
             global_translations[config_name] = section_data
             logger.info(

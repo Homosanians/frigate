@@ -6108,6 +6108,40 @@ paths:
       security:
         - frigateUserAuth: []
       x-required-role: camera
+  /{camera_name}/onvif/time_sync:
+    post:
+      tags:
+        - Media
+      summary: Camera Onvif Time Sync
+      description: |-
+        **Access:** Admin role required.
+
+        Set the NTP server and timezone from the camera's time sync config on the camera over ONVIF.
+      operationId: camera_onvif_time_sync__camera_name__onvif_time_sync_post
+      parameters:
+        - name: camera_name
+          in: path
+          required: true
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Camera Name
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+        - frigateAdminAuth: []
+      x-required-role: admin
   /{camera_name}/latest.{extension}:
     get:
       tags:

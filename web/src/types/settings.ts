@@ -29,6 +29,7 @@ export const settingsViewGroups = [
       "globalLivePlayback",
       "globalTimestampStyle",
       "globalImageSource",
+      "globalOnvif",
     ],
   },
   {

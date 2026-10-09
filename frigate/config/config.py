@@ -57,6 +57,7 @@ from .camera.mask import ObjectMaskConfig
 from .camera.motion import MotionConfig
 from .camera.notification import NotificationConfig
 from .camera.objects import FilterConfig, ObjectConfig
+from .camera.onvif import GlobalOnvifConfig
 from .camera.record import RecordConfig
 from .camera.review import ReviewConfig
 from .camera.snapshots import SnapshotsConfig
@@ -683,6 +684,11 @@ class FrigateConfig(FrigateBaseModel):
         title="Image source",
         description="Which stream saved images are taken from for all cameras; can be overridden per-camera.",
     )
+    onvif: GlobalOnvifConfig = Field(
+        default_factory=GlobalOnvifConfig,
+        title="ONVIF",
+        description="ONVIF settings for all cameras with an ONVIF host; can be overridden per-camera.",
+    )
 
     # Classification Config
     audio_transcription: AudioTranscriptionConfig = Field(
@@ -1120,6 +1126,7 @@ class FrigateConfig(FrigateBaseModel):
                 "notifications": ...,
                 "detect": ...,
                 "ffmpeg": ...,
+                "onvif": ...,
                 "timestamp_style": ...,
             },
             exclude_unset=True,

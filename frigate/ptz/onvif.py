@@ -2,9 +2,11 @@
 
 import asyncio
 import datetime
+import ipaddress
 import logging
 import threading
 import time
+from collections.abc import Coroutine
 from enum import Enum
 from importlib.util import find_spec
 from pathlib import Path
@@ -16,13 +18,22 @@ from zeep.exceptions import Fault
 
 from frigate.camera import PTZMetrics
 from frigate.config import FrigateConfig, ZoomingModeEnum
+from frigate.config.camera.onvif import OnvifTimeSyncConfig
 from frigate.config.camera.updater import (
     CameraConfigUpdateEnum,
     CameraConfigUpdateSubscriber,
 )
 from frigate.util.builtin import find_by_key
+from frigate.util.time import posix_timezone
 
 logger = logging.getLogger(__name__)
+
+# how often time sync is retried while a camera is unreachable
+TIME_SYNC_RETRY_SECONDS = 300
+# after a sync, how long to wait for the camera's clock to be corrected
+CLOCK_SETTLE_SECONDS = 120
+CLOCK_POLL_SECONDS = 5
+CLOCK_SETTLED_OFFSET_SECONDS = 5
 
 
 class OnvifCommandEnum(str, Enum):
@@ -125,6 +136,50 @@ def _date_time_info(system_date: Any) -> dict[str, Any]:
     }
 
 
+def _network_host(address: str) -> dict[str, str]:
+    """Build an ONVIF NetworkHost for an IP address or hostname."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return {"Type": "DNS", "DNSname": address}
+
+    if ip.version == 4:
+        return {"Type": "IPv4", "IPv4Address": address}
+
+    return {"Type": "IPv6", "IPv6Address": address}
+
+
+def _date_time_request(current: Any, time_sync: OnvifTimeSyncConfig) -> dict[str, Any]:
+    """Build a SetSystemDateAndTime request that only changes what time sync sets."""
+    date_time_type = (
+        "NTP"
+        if time_sync.ntp_server
+        else getattr(current, "DateTimeType", None) or "Manual"
+    )
+    request: dict[str, Any] = {
+        "DateTimeType": date_time_type,
+        "DaylightSavings": bool(getattr(current, "DaylightSavings", False)),
+    }
+
+    if time_sync.timezone:
+        tz = posix_timezone(time_sync.timezone)
+        request["TimeZone"] = {"TZ": tz}
+        # daylight saving rules follow the standard offset after a comma
+        request["DaylightSavings"] = "," in tz
+    elif current_tz := getattr(getattr(current, "TimeZone", None), "TZ", None):
+        request["TimeZone"] = {"TZ": current_tz}
+
+    # a manually set clock needs the time itself, so use Frigate's
+    if date_time_type == "Manual":
+        now = datetime.datetime.now(datetime.UTC)
+        request["UTCDateTime"] = {
+            "Date": {"Year": now.year, "Month": now.month, "Day": now.day},
+            "Time": {"Hour": now.hour, "Minute": now.minute, "Second": now.second},
+        }
+
+    return request
+
+
 def _ntp_info(ntp: Any) -> dict[str, Any]:
     from_dhcp = getattr(ntp, "FromDHCP", None)
     hosts = getattr(ntp, "NTPFromDHCP" if from_dhcp else "NTPManual", None) or []
@@ -160,6 +215,9 @@ class OnvifController:
         # serializes device management requests, which share the session's
         # service addresses and clock offset with PTZ initialization
         self.device_locks: dict[str, asyncio.Lock] = {}
+        self.time_sync_tasks: dict[str, asyncio.Task] = {}
+        # kept apart from self.cams so a result outlives a session reconnect
+        self.time_sync_results: dict[str, dict[str, Any]] = {}
 
         # Create a dedicated event loop and run it in a separate thread
         self.loop = asyncio.new_event_loop()
@@ -218,6 +276,12 @@ class OnvifController:
 
     async def _close_camera(self, cam_name: str) -> None:
         """Close the ONVIF client session for a camera."""
+        task = self.time_sync_tasks.pop(cam_name, None)
+
+        # a time sync task may be the one closing the session to reconnect
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
         cam_state = self.cams.get(cam_name)
         if cam_state and "onvif" in cam_state:
             try:
@@ -233,9 +297,16 @@ class OnvifController:
         self.failed_cams.pop(cam_name, None)
         self.status_locks.pop(cam_name, None)
         self.device_locks.pop(cam_name, None)
+        self.time_sync_results.pop(cam_name, None)
 
     async def _reinit_camera(self, cam_name: str) -> None:
         """Re-initialize a camera after config change."""
+        cam = self.config.cameras.get(cam_name)
+
+        # global onvif changes reach every camera, including ones without ONVIF
+        if cam_name not in self.cams and not (cam and cam.onvif.host):
+            return
+
         logger.info(f"Re-initializing ONVIF for {cam_name} due to config change")
 
         # close existing session and reset state before re-init
@@ -243,15 +314,17 @@ class OnvifController:
         self.cams.pop(cam_name, None)
         self.failed_cams.pop(cam_name, None)
 
-        cam = self.config.cameras.get(cam_name)
         if cam and cam.onvif.host:
             await self._init_single_camera(cam_name)
 
-    async def _init_single_camera(self, cam_name: str) -> bool:
+    async def _init_single_camera(
+        self, cam_name: str, schedule_time_sync: bool = True
+    ) -> bool:
         """Initialize a single camera by name.
 
         Args:
             cam_name: The name of the camera to initialize
+            schedule_time_sync: Apply the camera's time sync settings in the background
 
         Returns:
             bool: True if initialization succeeded, False otherwise
@@ -281,7 +354,6 @@ class OnvifController:
                 "max_presets": None,
                 "profiles": [],
             }
-            return True
         except Exception as e:
             logger.error(f"Failed to create ONVIF camera instance for {cam_name}: {e}")
             # track initial failures
@@ -290,6 +362,48 @@ class OnvifController:
                 "last_attempt": time.time(),
             }
             return False
+
+        if schedule_time_sync and cam.onvif.time_sync.enabled:
+            self._start_time_sync_task(cam_name, self._time_sync_loop(cam_name))
+
+        return True
+
+    def _start_time_sync_task(self, cam_name: str, coro: Coroutine) -> None:
+        """Run time sync work for a camera, replacing any that is still running."""
+        task = self.time_sync_tasks.get(cam_name)
+
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+        self.time_sync_tasks[cam_name] = asyncio.create_task(coro)
+
+    async def _time_sync_loop(self, camera_name: str) -> None:
+        """Apply the camera's time sync settings, retrying while it is unreachable."""
+        warned = False
+
+        while True:
+            try:
+                await self.sync_time(camera_name)
+                logger.info(f"Applied ONVIF time settings to {camera_name}")
+                return
+            except Fault as e:
+                # the camera answered, so retrying will not change its mind
+                logger.warning(
+                    f"{camera_name}: Camera rejected the ONVIF time settings: {e.message}. Setting the time requires an ONVIF user with administrator rights."
+                )
+                return
+            except (OnvifRequestError, OnvifUnavailableError) as e:
+                logger.warning(
+                    f"{camera_name}: Unable to apply ONVIF time settings: {e}"
+                )
+                return
+            except Exception as e:
+                (logger.debug if warned else logger.warning)(
+                    f"{camera_name}: Unable to apply ONVIF time settings, retrying in {TIME_SYNC_RETRY_SECONDS} seconds: {e}"
+                )
+                warned = True
+
+            await asyncio.sleep(TIME_SYNC_RETRY_SECONDS)
 
     async def _init_onvif(self, camera_name: str) -> bool:
         camera_config = self.config.cameras.get(camera_name)
@@ -1179,8 +1293,9 @@ class OnvifController:
         if camera_config is None or not camera_config.onvif.host:
             raise OnvifUnavailableError(f"ONVIF is not configured for {camera_name}")
 
+        # reading info or syncing on request must not also start the background sync
         if camera_name not in self.cams and not await self._init_single_camera(
-            camera_name
+            camera_name, schedule_time_sync=False
         ):
             raise OnvifUnavailableError(f"ONVIF failed to initialize for {camera_name}")
 
@@ -1261,7 +1376,120 @@ class OnvifController:
         if len(errors) == 4:
             raise errors[0]
 
+        time_sync = self.config.cameras[camera_name].onvif.time_sync
+        info["time_sync"] = {
+            "enabled": time_sync.enabled,
+            "ntp_server": time_sync.ntp_server,
+            "timezone": time_sync.timezone,
+            "posix_timezone": posix_timezone(time_sync.timezone)
+            if time_sync.timezone
+            else None,
+            "last_result": self.time_sync_results.get(camera_name),
+        }
+
         return info
+
+    async def sync_time(self, camera_name: str) -> None:
+        """Set the camera's NTP server and timezone from its time sync config."""
+        camera_config = self.config.cameras.get(camera_name)
+
+        if camera_config is None:
+            raise OnvifUnavailableError(f"ONVIF is not configured for {camera_name}")
+
+        time_sync = camera_config.onvif.time_sync
+
+        if not time_sync.enabled:
+            raise OnvifRequestError(f"Time sync is not enabled for {camera_name}")
+
+        if time_sync.ntp_server is None and time_sync.timezone is None:
+            raise OnvifRequestError(
+                f"Time sync for {camera_name} has no NTP server or timezone set"
+            )
+
+        cam = await self._get_onvif_session(camera_name)
+
+        try:
+            async with self.device_locks.setdefault(camera_name, asyncio.Lock()):
+                device = await self._get_device_service(camera_name)
+
+                if time_sync.ntp_server:
+                    await device.SetNTP(
+                        {
+                            "FromDHCP": False,
+                            "NTPManual": [_network_host(time_sync.ntp_server)],
+                        }
+                    )
+
+                current = await self._get_system_date_and_time(device)
+                await device.SetSystemDateAndTime(
+                    _date_time_request(current, time_sync)
+                )
+        except Exception as e:
+            self.time_sync_results[camera_name] = {
+                "time": time.time(),
+                "success": False,
+                "message": getattr(e, "message", None) or str(e),
+            }
+            raise
+
+        self.time_sync_results[camera_name] = {
+            "time": time.time(),
+            "success": True,
+            "message": None,
+        }
+
+        # with ignore_time_mismatch the session keeps the clock offset it
+        # measured on connect, which goes stale once a wrong clock is corrected
+        measured = cam["onvif"].dt_diff
+
+        if (
+            cam["onvif"].adjust_time
+            and measured is not None
+            and abs(measured.total_seconds()) >= CLOCK_SETTLED_OFFSET_SECONDS
+        ):
+            self._start_time_sync_task(
+                camera_name,
+                self._refresh_clock_offset(camera_name, measured.total_seconds()),
+            )
+
+    async def _refresh_clock_offset(
+        self, camera_name: str, measured_offset: float
+    ) -> None:
+        """Reconnect once the camera's clock has settled after a time sync.
+
+        A camera switched to NTP corrects its clock some time after the request,
+        so wait for that before the new session measures the clock offset.
+        """
+        deadline = time.monotonic() + CLOCK_SETTLE_SECONDS
+        offset = None
+
+        while time.monotonic() < deadline:
+            await asyncio.sleep(CLOCK_POLL_SECONDS)
+
+            try:
+                async with self.device_locks.setdefault(camera_name, asyncio.Lock()):
+                    device = await self._get_device_service(camera_name)
+                    offset = _date_time_info(
+                        await self._get_system_date_and_time(device)
+                    )["offset_seconds"]
+            except Exception as e:
+                logger.debug(f"Unable to read the clock of {camera_name}: {e}")
+                continue
+
+            if offset is not None and abs(offset) < CLOCK_SETTLED_OFFSET_SECONDS:
+                break
+
+        # the measured offset still holds while the camera's clock has not moved
+        if (
+            offset is None
+            or abs(offset - measured_offset) < CLOCK_SETTLED_OFFSET_SECONDS
+        ):
+            return
+
+        logger.debug(f"Reconnecting ONVIF for {camera_name} after a clock change")
+        await self._close_camera(camera_name)
+        self.cams.pop(camera_name, None)
+        await self._init_single_camera(camera_name, schedule_time_sync=False)
 
     async def get_service_capabilities(self, camera_name: str) -> None:
         if camera_name not in self.cams.keys():

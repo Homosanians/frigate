@@ -106,6 +106,7 @@ def _make_controller(
     controller.cams = {CAMERA: {"onvif": onvif, "init": False}}
     controller.failed_cams = {}
     controller.device_locks = {}
+    controller.time_sync_results = {}
     return controller
 
 

@@ -7,6 +7,7 @@ const onvif: SectionConfigOverrides = {
       autotracking: "/configuration/autotracking",
       "autotracking.calibrate_on_startup":
         "/configuration/autotracking#calibration",
+      time_sync: "/configuration/cameras#synchronizing-camera-time",
     },
     fieldOrder: [
       "host",
@@ -16,6 +17,7 @@ const onvif: SectionConfigOverrides = {
       "profile",
       "tls_insecure",
       "ignore_time_mismatch",
+      "time_sync",
       "autotracking",
     ],
     hiddenFields: [
@@ -59,6 +61,14 @@ const onvif: SectionConfigOverrides = {
       profile: {
         "ui:widget": "onvifProfile",
       },
+      time_sync: {
+        ntp_server: {
+          "ui:options": { size: "sm" },
+        },
+        timezone: {
+          "ui:options": { size: "sm" },
+        },
+      },
       autotracking: {
         required_zones: {
           "ui:widget": "zoneNames",
@@ -81,6 +91,15 @@ const onvif: SectionConfigOverrides = {
         },
       },
     },
+  },
+  // the global section only holds time sync, which cameras inherit
+  global: {
+    sectionDocs: "/configuration/cameras#synchronizing-camera-time",
+    fieldOrder: ["time_sync"],
+    hiddenFields: [],
+    advancedFields: [],
+    restartRequired: [],
+    fieldMessages: [],
   },
 };
 

@@ -172,6 +172,7 @@ const GlobalImageSourceSettingsPage = createSectionPage(
   "image_source",
   "global",
 );
+const GlobalOnvifSettingsPage = createSectionPage("onvif", "global");
 
 const SystemDatabaseSettingsPage = createSectionPage("database", "global");
 const SystemTlsSettingsPage = createSectionPage("tls", "global");
@@ -266,6 +267,7 @@ const SECTION_VIEWS = {
   globalLivePlayback: GlobalLivePlaybackSettingsPage,
   globalTimestampStyle: GlobalTimestampStyleSettingsPage,
   globalImageSource: GlobalImageSourceSettingsPage,
+  globalOnvif: GlobalOnvifSettingsPage,
   cameraDetect: CameraDetectSettingsPage,
   cameraObjects: CameraObjectsSettingsPage,
   cameraMotion: CameraMotionSettingsPage,
@@ -405,6 +407,7 @@ const GLOBAL_SECTION_MAPPING: Record<string, SettingsType> = {
   live: "globalLivePlayback",
   timestamp_style: "globalTimestampStyle",
   image_source: "globalImageSource",
+  onvif: "globalOnvif",
   notifications: "notifications",
 };
 

@@ -231,6 +231,26 @@
       }
     }
   },
+  "image_source": {
+    "label": "Image source",
+    "description": "Which stream saved images are taken from for this camera.",
+    "stream": {
+      "label": "Image source stream",
+      "description": "Stream that saved images (faces, license plates, classification crops, snapshots) are taken from. 'detect' uses the detect stream, 'main' replaces them with a frame from the main stream when one can be fetched, 'auto' only does so when that frame is larger than the detect stream."
+    },
+    "match_threshold": {
+      "label": "Match threshold",
+      "description": "The main and detect streams are not in sync, so the main stream is searched for the frame that shows the same moment as the detect image. This is the minimum similarity (normalized correlation, 0 to 1) a main stream frame needs to be used. Higher values keep the detect image more often, lower values risk saving a frame from a different moment."
+    },
+    "search_before": {
+      "label": "Search before",
+      "description": "Seconds before the detect frame time that the main stream recording is searched for the matching frame. Raise this if the recording runs ahead of the detect stream."
+    },
+    "search_after": {
+      "label": "Search after",
+      "description": "Seconds after the detect frame time that the main stream recording is searched for the matching frame. Saved images are replaced only once this much of the recording has been written, so higher values delay the replacement."
+    }
+  },
   "live": {
     "label": "Live playback",
     "description": "Settings used by the Web UI to control live stream selection, resolution and quality.",
@@ -771,26 +791,6 @@
       "description": "Encode quality for saved snapshots (0-100)."
     }
   },
-  "image_source": {
-    "label": "Image source",
-    "description": "Which stream saved images are taken from for this camera.",
-    "stream": {
-      "label": "Image source stream",
-      "description": "Stream that saved images (faces, license plates, classification crops, snapshots) are taken from. 'detect' uses the detect stream, 'main' replaces them with a frame from the main stream when one can be fetched, 'auto' only does so when that frame is larger than the detect stream."
-    },
-    "match_threshold": {
-      "label": "Match threshold",
-      "description": "The main and detect streams are not in sync, so the main stream is searched for the frame that shows the same moment as the detect image. This is the minimum similarity (normalized correlation, 0 to 1) a main stream frame needs to be used. Higher values keep the detect image more often, lower values risk saving a frame from a different moment."
-    },
-    "search_before": {
-      "label": "Search before",
-      "description": "Seconds before the detect frame time that the main stream recording is searched for the matching frame. Raise this if the recording runs ahead of the detect stream."
-    },
-    "search_after": {
-      "label": "Search after",
-      "description": "Seconds after the detect frame time that the main stream recording is searched for the matching frame. Saved images are replaced only once this much of the recording has been written, so higher values delay the replacement."
-    }
-  },
   "timestamp_style": {
     "label": "Timestamp style",
     "description": "Styling options for timestamps applied to snapshots and Debug view.",
@@ -885,7 +885,7 @@
   },
   "onvif": {
     "label": "ONVIF",
-    "description": "ONVIF connection and PTZ autotracking settings for this camera.",
+    "description": "ONVIF connection, PTZ autotracking and time sync settings for this camera.",
     "host": {
       "label": "ONVIF host",
       "description": "Host (and optional scheme) for the ONVIF service for this camera."
@@ -961,6 +961,22 @@
     "ignore_time_mismatch": {
       "label": "Ignore time mismatch",
       "description": "Ignore time synchronization differences between camera and Frigate server for ONVIF communication."
+    },
+    "time_sync": {
+      "label": "Time sync",
+      "description": "NTP server and timezone that Frigate sets on the camera over ONVIF.",
+      "enabled": {
+        "label": "Enable time sync",
+        "description": "Set the NTP server and timezone below on the camera at startup and whenever this setting changes. Requires an ONVIF user with administrator rights."
+      },
+      "ntp_server": {
+        "label": "NTP server",
+        "description": "Hostname or IP address of the NTP server the camera synchronizes its clock with. Leave empty to keep the camera's NTP settings."
+      },
+      "timezone": {
+        "label": "Timezone",
+        "description": "Timezone for the camera, either a name such as Europe/Moscow or an offset such as UTC+3. Leave empty to keep the camera's timezone."
+      }
     }
   },
   "type": {

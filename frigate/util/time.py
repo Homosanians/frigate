@@ -3,12 +3,58 @@
 import datetime
 import logging
 import math
+import re
 from zoneinfo import ZoneInfoNotFoundError
 
 import pytz
 from tzlocal import get_localzone
 
 logger = logging.getLogger(__name__)
+
+UTC_OFFSET_PATTERN = re.compile(
+    r"^(?:UTC|GMT)\s*(?:([+-])\s*(\d{1,2})(?::?(\d{2}))?)?$", re.IGNORECASE
+)
+
+
+def posix_timezone(value: str) -> str:
+    """Convert an IANA zone name or a UTC offset to a POSIX TZ string.
+
+    Accepts names such as "Europe/Moscow" and offsets such as "UTC+3" or
+    "GMT-5:30". POSIX offsets count hours west of UTC, so "UTC+3" becomes
+    "UTC-3". Raises ValueError for anything else.
+    """
+    value = value.strip()
+    match = UTC_OFFSET_PATTERN.match(value)
+
+    if match:
+        sign, hours, minutes = match.groups()
+        hours = int(hours or 0)
+        minutes = int(minutes or 0)
+
+        if hours > 14 or minutes >= 60:
+            raise ValueError(f"Invalid UTC offset: {value}")
+
+        if hours == 0 and minutes == 0:
+            return "UTC0"
+
+        posix = f"UTC{'-' if sign == '+' else ''}{hours}"
+        return f"{posix}:{minutes:02d}" if minutes else posix
+
+    try:
+        zone = pytz.timezone(value).zone
+
+        with pytz.open_resource(zone) as file:
+            data = file.read()
+    except (pytz.UnknownTimeZoneError, OSError, ValueError) as e:
+        raise ValueError(f"Unknown timezone: {value}") from e
+
+    # version 2+ zone files end with the zone's current rule as a POSIX TZ string
+    rule = data.rstrip(b"\n").rsplit(b"\n", 1)[-1] if data[4:5] >= b"2" else b""
+
+    if not rule or b"\0" in rule:
+        raise ValueError(f"No POSIX rule available for timezone: {value}")
+
+    return rule.decode()
 
 
 def get_tz_modifiers(tz_name: str) -> tuple[str, str, float]:

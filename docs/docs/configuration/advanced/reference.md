@@ -954,6 +954,16 @@ image_source:
   #       so higher values delay the replacement.
   search_after: 4.0
 
+# Optional: ONVIF settings for all cameras that have an ONVIF host
+# NOTE: Can be overridden at the camera level
+onvif:
+  # Optional: Set the NTP server and timezone of ONVIF cameras.
+  # See the camera level onvif.time_sync below for details.
+  time_sync:
+    enabled: False
+    ntp_server: None
+    timezone: None
+
 # Optional: in-feed timestamp style configuration
 # NOTE: Can be overridden at the camera level
 timestamp_style:
@@ -1121,6 +1131,19 @@ cameras:
       # If not set, the first profile with valid PTZ configuration is selected automatically.
       # Use this when your camera has multiple ONVIF profiles and you need to select a specific one.
       profile: None
+      # Optional: Set the camera's NTP server and timezone over ONVIF at startup and whenever
+      # this setting changes. Requires an ONVIF user with administrator rights.
+      # NOTE: Can be set for all cameras with the global onvif section.
+      time_sync:
+        # Optional: Enable time sync for this camera (default: shown below)
+        enabled: False
+        # Optional: Hostname or IP address of the NTP server the camera synchronizes with.
+        # When not set, the camera's NTP settings are left unchanged (default: shown below)
+        ntp_server: None
+        # Optional: Timezone for the camera, either a name such as Europe/Moscow or an offset
+        # such as UTC+3 or UTC-5:30. When not set, the camera's timezone is left unchanged.
+        # (default: shown below)
+        timezone: None
       # Optional: PTZ camera object autotracking. Keeps a moving object in
       # the center of the frame by automatically moving the PTZ camera.
       autotracking:

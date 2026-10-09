@@ -52,6 +52,7 @@ class TestHttpPtz(BaseTestHttp):
             remove_preset=AsyncMock(),
             set_home=AsyncMock(),
             get_device_info=AsyncMock(return_value=DEVICE_INFO),
+            sync_time=AsyncMock(),
         )
         self.app.onvif = self.onvif
 
@@ -156,3 +157,33 @@ class TestHttpPtz(BaseTestHttp):
 
         assert response.status_code in (403, 404)
         self.onvif.get_device_info.assert_not_awaited()
+
+    def test_sync_time(self):
+        with AuthTestClient(self.app) as client:
+            response = client.post(f"/{CAMERA}/onvif/time_sync")
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        self.onvif.sync_time.assert_awaited_once_with(CAMERA)
+
+    def test_viewer_cannot_sync_time(self):
+        with AuthTestClient(self.app) as client:
+            response = client.post(f"/{CAMERA}/onvif/time_sync", headers=VIEWER)
+
+        assert response.status_code == 403
+        self.onvif.sync_time.assert_not_awaited()
+
+    def test_sync_time_errors_mapped_to_status_codes(self):
+        for error, status in (
+            (OnvifRequestError("Time sync is not enabled for front_door"), 400),
+            (OnvifUnavailableError("ONVIF is not configured"), 404),
+            (CameraFault("Sender not authorized"), 502),
+        ):
+            with self.subTest(error=error):
+                self.onvif.sync_time.side_effect = error
+
+                with AuthTestClient(self.app) as client:
+                    response = client.post(f"/{CAMERA}/onvif/time_sync")
+
+                assert response.status_code == status
+                assert str(error) in response.json()["message"]

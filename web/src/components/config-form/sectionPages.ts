@@ -32,6 +32,7 @@ export const GLOBAL_PAGE_BY_SECTION: Record<string, string> = {
   live: "globalLivePlayback",
   timestamp_style: "globalTimestampStyle",
   image_source: "globalImageSource",
+  onvif: "globalOnvif",
   database: "systemDatabase",
   tls: "systemTls",
   auth: "systemAuthentication",

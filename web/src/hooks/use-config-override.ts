@@ -499,6 +499,8 @@ export const OVERRIDABLE_SECTIONS: ReadonlyArray<{
     key: "lpr",
     compareFields: ["enabled", "min_area", "enhancement"],
   },
+  // only time sync has a global value, the rest is per-camera connection info
+  { key: "onvif", compareFields: ["time_sync"] },
 ];
 
 /**

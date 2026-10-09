@@ -67,6 +67,7 @@
     "globalAudioEvents": "Audio detection",
     "globalLivePlayback": "Live playback",
     "globalImageSource": "Image source",
+    "globalOnvif": "ONVIF",
     "globalTimestampStyle": "Timestamp style",
     "systemDatabase": "Database",
     "systemTls": "TLS",
@@ -1077,6 +1078,23 @@
         "fromDhcp": "From DHCP",
         "servers": "Servers",
         "noServers": "None"
+      },
+      "timeSync": {
+        "title": "Time sync",
+        "desc": "NTP server and timezone Frigate sets on the camera, from the ONVIF settings.",
+        "disabled": "Not enabled for this camera",
+        "ntpServer": "NTP server",
+        "timezone": "Timezone",
+        "notSet": "Not set",
+        "lastResult": "Last attempt",
+        "notApplied": "Not applied yet",
+        "applied": "Applied {{time}}",
+        "failed": "Failed {{time}}: {{message}}",
+        "syncNow": "Sync time now",
+        "toast": {
+          "success": "Camera time settings applied",
+          "error": "Unable to apply camera time settings: {{message}}"
+        }
       }
     }
   },

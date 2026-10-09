@@ -338,6 +338,23 @@ async def camera_onvif_info(request: Request, camera_name: str):
     return await _onvif_request(request, camera_name, request.app.onvif.get_device_info)
 
 
+@router.post(
+    "/{camera_name}/onvif/time_sync",
+    dependencies=[
+        Depends(require_camera_access),
+        Depends(require_role(["admin"])),
+    ],
+    description="Set the NTP server and timezone from the camera's time sync config on the camera over ONVIF.",
+)
+async def camera_onvif_time_sync(request: Request, camera_name: str):
+    return await _onvif_request(
+        request,
+        camera_name,
+        request.app.onvif.sync_time,
+        message="Camera time settings applied",
+    )
+
+
 @router.get(
     "/{camera_name}/latest.{extension}",
     dependencies=[Depends(require_camera_access)],

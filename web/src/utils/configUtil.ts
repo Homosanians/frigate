@@ -98,6 +98,7 @@ export const globalCameraDefaultSections = new Set([
   "audio",
   "notifications",
   "ffmpeg",
+  "onvif",
 ]);
 
 // ---------------------------------------------------------------------------

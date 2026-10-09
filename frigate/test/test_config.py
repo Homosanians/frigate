@@ -2362,5 +2362,120 @@ class TestAttributeFilterDefaults(unittest.TestCase):
         self.assertEqual(face_filter.min_score, 0.3)
 
 
+class TestOnvifTimeSyncConfig(unittest.TestCase):
+    def _build_config(
+        self, global_time_sync: dict | None = None, back_time_sync: dict | None = None
+    ) -> FrigateConfig:
+        def camera(host: str, time_sync: dict | None) -> dict:
+            onvif = {"host": host}
+            if time_sync is not None:
+                onvif["time_sync"] = time_sync
+            return {
+                "ffmpeg": {
+                    "inputs": [
+                        {"path": f"rtsp://{host}:554/video", "roles": ["detect"]}
+                    ]
+                },
+                "detect": {"height": 1080, "width": 1920, "fps": 5},
+                "onvif": onvif,
+            }
+
+        config = {
+            "mqtt": {"host": "mqtt"},
+            "cameras": {
+                "back": camera("10.0.0.2", back_time_sync),
+                "front": camera("10.0.0.3", None),
+            },
+        }
+
+        if global_time_sync is not None:
+            config["onvif"] = {"time_sync": global_time_sync}
+
+        return FrigateConfig(**config)
+
+    def test_disabled_by_default(self):
+        config = self._build_config()
+
+        time_sync = config.cameras["back"].onvif.time_sync
+        self.assertFalse(time_sync.enabled)
+        self.assertIsNone(time_sync.ntp_server)
+        self.assertIsNone(time_sync.timezone)
+
+    def test_global_settings_inherited(self):
+        config = self._build_config(
+            {"enabled": True, "ntp_server": "pool.ntp.org", "timezone": "UTC+3"}
+        )
+
+        for name in ("back", "front"):
+            time_sync = config.cameras[name].onvif.time_sync
+            self.assertTrue(time_sync.enabled)
+            self.assertEqual(time_sync.ntp_server, "pool.ntp.org")
+            self.assertEqual(time_sync.timezone, "UTC+3")
+
+    def test_camera_overrides_single_field(self):
+        config = self._build_config(
+            {"enabled": True, "ntp_server": "pool.ntp.org", "timezone": "UTC+3"},
+            {"timezone": "Europe/Berlin"},
+        )
+
+        back = config.cameras["back"].onvif.time_sync
+        self.assertTrue(back.enabled)
+        self.assertEqual(back.ntp_server, "pool.ntp.org")
+        self.assertEqual(back.timezone, "Europe/Berlin")
+        self.assertEqual(config.cameras["front"].onvif.time_sync.timezone, "UTC+3")
+
+    def test_camera_opts_out(self):
+        config = self._build_config(
+            {"enabled": True, "ntp_server": "pool.ntp.org"}, {"enabled": False}
+        )
+
+        self.assertFalse(config.cameras["back"].onvif.time_sync.enabled)
+        self.assertTrue(config.cameras["front"].onvif.time_sync.enabled)
+
+    def test_valid_values_normalized(self):
+        for ntp_server in ("pool.ntp.org", "ntp", "192.168.1.1", "fe80::1"):
+            with self.subTest(ntp_server=ntp_server):
+                config = self._build_config({"ntp_server": f" {ntp_server} "})
+                self.assertEqual(
+                    config.cameras["back"].onvif.time_sync.ntp_server, ntp_server
+                )
+
+        config = self._build_config({"ntp_server": "", "timezone": " "})
+        self.assertIsNone(config.cameras["back"].onvif.time_sync.ntp_server)
+        self.assertIsNone(config.cameras["back"].onvif.time_sync.timezone)
+
+    def test_invalid_values_rejected(self):
+        for time_sync in (
+            {"timezone": "Mars/Olympus_Mons"},
+            {"timezone": "UTC+15"},
+            {"ntp_server": "pool ntp.org"},
+            {"ntp_server": "http://pool.ntp.org"},
+            {"ntp_server": "-bad.example"},
+        ):
+            with self.subTest(time_sync=time_sync):
+                with self.assertRaises(ValidationError):
+                    self._build_config(back_time_sync=time_sync)
+
+    def test_global_onvif_only_holds_time_sync(self):
+        with self.assertRaises(ValidationError):
+            FrigateConfig(
+                mqtt={"host": "mqtt"},
+                onvif={"host": "10.0.0.2"},
+                cameras={
+                    "back": {
+                        "ffmpeg": {
+                            "inputs": [
+                                {
+                                    "path": "rtsp://10.0.0.2:554/video",
+                                    "roles": ["detect"],
+                                }
+                            ]
+                        },
+                        "detect": {"height": 1080, "width": 1920, "fps": 5},
+                    }
+                },
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

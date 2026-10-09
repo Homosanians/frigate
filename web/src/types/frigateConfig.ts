@@ -218,6 +218,7 @@ export interface CameraConfig {
     port: number;
     user: string | null;
     tls_insecure: boolean;
+    time_sync: OnvifTimeSyncConfig;
   };
   record: {
     enabled: boolean;
@@ -453,6 +454,12 @@ export type DetectionModelConfig = {
   } | null;
 };
 
+export type OnvifTimeSyncConfig = {
+  enabled: boolean;
+  ntp_server: string | null;
+  timezone: string | null;
+};
+
 export interface FrigateConfig {
   version: string;
   safe_mode: boolean;
@@ -683,6 +690,10 @@ export interface FrigateConfig {
     match_threshold: number;
     search_before: number;
     search_after: number;
+  };
+
+  onvif: {
+    time_sync: OnvifTimeSyncConfig;
   };
 
   timestamp_style: {

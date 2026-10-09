@@ -217,7 +217,7 @@ If your ONVIF camera does not require authentication credentials, you may still 
 If a camera connects but fails to authenticate, two optional fields can help:
 
 - `tls_insecure`: Skips TLS certificate verification and sends the ONVIF password as plaintext (`PasswordText`) instead of a hashed digest (`PasswordDigest`). Some cameras reject the digest token and only accept plaintext. This weakens connection security, so only enable it on a trusted local network.
-- `ignore_time_mismatch`: ONVIF authentication tokens include a timestamp, and a camera will reject the token if its clock differs too much from Frigate's. Enabling this makes Frigate compensate for the time offset so authentication can still succeed. Running NTP on both the camera and the Frigate host is the recommended fix; only use this in a "safe" environment, as it slightly weakens token validation.
+- `ignore_time_mismatch`: ONVIF authentication tokens include a timestamp, and a camera will reject the token if its clock differs too much from Frigate's. Enabling this makes Frigate compensate for the time offset so authentication can still succeed. Running NTP on both the camera and the Frigate host is the recommended fix (Frigate can set the camera's NTP server, see [synchronizing camera time](#synchronizing-camera-time)); only use this in a "safe" environment, as it slightly weakens token validation.
 
 If your camera has multiple ONVIF profiles, you can specify which one to use for PTZ control with the `profile` option, matched by token or name. When not set, Frigate selects the first profile with a valid PTZ configuration. Check the Frigate debug logs (`frigate.ptz.onvif: debug`) to see available profile names and tokens for your camera.
 
@@ -234,6 +234,60 @@ Presets are stored on the camera itself. ONVIF has no rename operation, so overw
 For any camera with an ONVIF host configured, PTZ or not, the debug view in the Live view has an **ONVIF** tab showing what the camera reports about itself: manufacturer, model and firmware, the ONVIF conformance profiles it advertises (such as Profile S, G or T), its time source, timezone and NTP servers, and how far its clock is from Frigate's.
 
 Cameras declare their profiles themselves and some firmware leaves them out, so a missing profile does not prove the camera lacks support. The [ONVIF conformant products database](https://www.onvif.org/conformant-products/) is the authoritative source.
+
+### Synchronizing camera time
+
+Frigate can set the NTP server and timezone of ONVIF cameras so that every camera keeps the same clock and shows the same local time in its own overlay and web interface. Set it once for all cameras, then override it or turn it off for individual cameras.
+
+<ConfigTabs>
+<TabItem value="ui">
+
+1. Navigate to <NavPath path="Settings > Global configuration > ONVIF" />.
+   - Set **Enable time sync** to on
+   - Set **NTP server** to the server your cameras should use, e.g.: `pool.ntp.org`
+   - Set **Timezone**, e.g.: `Europe/Moscow` or `UTC+3`
+2. To use different values for one camera, or to turn time sync off for it, navigate to <NavPath path="Settings > Camera configuration > ONVIF" /> and select the camera.
+
+</TabItem>
+<TabItem value="yaml">
+
+```yaml
+onvif:
+  time_sync:
+    enabled: true
+    ntp_server: pool.ntp.org
+    timezone: Europe/Moscow
+
+cameras:
+  back:
+    ffmpeg: ...
+    onvif:
+      host: 10.0.10.10
+      port: 8000
+      user: admin
+      password: password
+      time_sync:
+        timezone: UTC+2
+  front:
+    ffmpeg: ...
+    onvif:
+      host: 10.0.10.11
+      port: 8000
+      user: admin
+      password: password
+      time_sync:
+        enabled: false
+```
+
+</TabItem>
+</ConfigTabs>
+
+Frigate applies the settings when it starts and whenever they are saved, and retries every 5 minutes while a camera is unreachable. Admin users can also apply them with **Sync time now** in the ONVIF tab of the camera's debug view, which shows the result next to the camera's clock and NTP settings.
+
+- Leaving the NTP server or the timezone empty keeps the camera's own value. A camera whose clock is set manually and only receives a timezone also has its clock set to Frigate's time.
+- The timezone can be a name from the tz database such as `America/New_York`, which includes daylight saving rules, or a fixed offset such as `UTC+3` or `UTC-5:30`. ONVIF stores timezones as POSIX strings, which count offsets the other way round, so `UTC+3` is sent to the camera as `UTC-3`. Some cameras ignore or alter the timezone they receive; the ONVIF tab shows what the camera stored.
+- Changing the time requires an ONVIF user with administrator rights. When a camera rejects the request, Frigate logs a warning and does not retry until the settings change or Frigate restarts.
+- A camera whose clock is already far off can reject Frigate's login before its time can be fixed. Enable `ignore_time_mismatch` for that camera; Frigate reconnects once the camera's clock has been corrected.
 
 ## ONVIF PTZ camera recommendations
 

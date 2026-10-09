@@ -47,4 +47,16 @@ export type OnvifDeviceInfo = {
     from_dhcp: boolean | null;
     servers: string[];
   } | null;
+  /** The camera's time sync config and the outcome of the last attempt. */
+  time_sync: {
+    enabled: boolean;
+    ntp_server: string | null;
+    timezone: string | null;
+    posix_timezone: string | null;
+    last_result: {
+      time: number;
+      success: boolean;
+      message: string | null;
+    } | null;
+  };
 };

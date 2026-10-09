@@ -1,12 +1,27 @@
+import ipaddress
+import re
 from enum import Enum
 
 from pydantic import Field, field_validator
+
+from frigate.util.time import posix_timezone
 
 from ..base import FrigateBaseModel
 from ..env import EnvString
 from .objects import DEFAULT_TRACKED_OBJECTS
 
-__all__ = ["OnvifConfig", "PtzAutotrackConfig", "ZoomingModeEnum"]
+__all__ = [
+    "GlobalOnvifConfig",
+    "OnvifConfig",
+    "OnvifTimeSyncConfig",
+    "PtzAutotrackConfig",
+    "ZoomingModeEnum",
+]
+
+HOSTNAME_PATTERN = re.compile(
+    r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$"
+)
 
 
 class ZoomingModeEnum(str, Enum):
@@ -97,6 +112,60 @@ class PtzAutotrackConfig(FrigateBaseModel):
         return weights
 
 
+class OnvifTimeSyncConfig(FrigateBaseModel):
+    enabled: bool = Field(
+        default=False,
+        title="Enable time sync",
+        description="Set the NTP server and timezone below on the camera at startup and whenever this setting changes. Requires an ONVIF user with administrator rights.",
+    )
+    ntp_server: str | None = Field(
+        default=None,
+        title="NTP server",
+        description="Hostname or IP address of the NTP server the camera synchronizes its clock with. Leave empty to keep the camera's NTP settings.",
+    )
+    timezone: str | None = Field(
+        default=None,
+        title="Timezone",
+        description="Timezone for the camera, either a name such as Europe/Moscow or an offset such as UTC+3. Leave empty to keep the camera's timezone.",
+    )
+
+    @field_validator("ntp_server", "timezone", mode="before")
+    @classmethod
+    def empty_as_none(cls, v):
+        if isinstance(v, str):
+            return v.strip() or None
+
+        return v
+
+    @field_validator("ntp_server")
+    @classmethod
+    def validate_ntp_server(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+
+        try:
+            ipaddress.ip_address(v)
+            return v
+        except ValueError:
+            pass
+
+        if not HOSTNAME_PATTERN.match(v):
+            raise ValueError(
+                f"Invalid NTP server {v}, expected a hostname or IP address"
+            )
+
+        return v
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str | None) -> str | None:
+        if v is not None:
+            # raises ValueError with the reason for an unusable timezone
+            posix_timezone(v)
+
+        return v
+
+
 class OnvifConfig(FrigateBaseModel):
     host: EnvString = Field(
         default="",
@@ -137,4 +206,17 @@ class OnvifConfig(FrigateBaseModel):
         default=False,
         title="Ignore time mismatch",
         description="Ignore time synchronization differences between camera and Frigate server for ONVIF communication.",
+    )
+    time_sync: OnvifTimeSyncConfig = Field(
+        default_factory=OnvifTimeSyncConfig,
+        title="Time sync",
+        description="NTP server and timezone that Frigate sets on the camera over ONVIF.",
+    )
+
+
+class GlobalOnvifConfig(FrigateBaseModel):
+    time_sync: OnvifTimeSyncConfig = Field(
+        default_factory=OnvifTimeSyncConfig,
+        title="Time sync",
+        description="NTP server and timezone that Frigate sets on the camera over ONVIF.",
     )

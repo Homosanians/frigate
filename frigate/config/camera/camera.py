@@ -178,7 +178,7 @@ class CameraConfig(FrigateBaseModel):
     onvif: OnvifConfig = Field(
         default_factory=OnvifConfig,
         title="ONVIF",
-        description="ONVIF connection and PTZ autotracking settings for this camera.",
+        description="ONVIF connection, PTZ autotracking and time sync settings for this camera.",
     )
     type: CameraTypeEnum = Field(
         default=CameraTypeEnum.generic,
