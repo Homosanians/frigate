@@ -689,6 +689,7 @@ class Simulation:
         tracker.autotracker_init = {}
         tracker.move_metrics = {}
         tracker.calibrating = {}
+        tracker.calibration_tasks = {}
         tracker.intercept = {}
         tracker.move_coefficients = {}
         tracker.zoom_time = {}
@@ -708,6 +709,10 @@ class Simulation:
 
         await self.tracker._autotracker_setup(self.camera_config, CAMERA)
         self.instrument_queue()
+
+        # calibration runs in the background
+        while self.tracker.calibrating.get(CAMERA):
+            await asyncio.sleep(0.5)
         self.calibration_moves = len(self.moves)
         maintenance = asyncio.ensure_future(self.maintenance())
 

@@ -149,7 +149,7 @@ After calibration has ended, your PTZ will be moved to the preset specified by `
 
 :::note
 
-Frigate's web UI and all other cameras will be unresponsive while calibration is in progress. This is expected and normal to avoid excessive network traffic or CPU usage during calibration. Calibration for most PTZs will take about two minutes. The Frigate log will show calibration progress and any errors.
+Calibration runs in the background once Frigate has started, so the web UI and other cameras stay available. Autotracking for the camera starts when calibration has finished. Calibration for most PTZs takes a few minutes, longer when the camera's stream has a lot of latency, since Frigate waits for each move to show in the video. The Frigate log will show calibration progress and any errors.
 
 :::
 
@@ -226,11 +226,11 @@ Some cameras have firmware that reports that FOV RelativeMove, the ONVIF command
 
 ### Calibration Issues
 
-<FaqItem id="calibration-fails-saying-the-camera-did-not-report-that-it-stopped-moving-why" question="Calibration fails, saying the camera did not report that it stopped moving. Why?">
+<FaqItem id="calibration-does-not-finish-and-the-log-says-it-is-still-waiting-for-the-camera-why" question="Calibration doesn't finish, and the log says it is still waiting for the camera to report that it stopped moving. Why?">
 
-Frigate waits up to 15 seconds for the camera to report that each calibration move finished. If it doesn't, calibration stops, the log shows `Calibration for <camera> failed: the camera did not report that it stopped moving`, and Frigate continues starting up without new `movement_weights`.
+Frigate waits for the camera to report that each calibration move finished, for as long as it takes, and logs `still waiting for the camera to report that it stopped moving` every minute while it does. Calibration runs in the background, so the rest of Frigate keeps working, but autotracking for that camera only starts once calibration has finished.
 
-This is often caused by the same reason as the "MOVING" status error above: the `MoveStatus` ONVIF parameter is not changing due to a bug in your camera's firmware. It also happens when something else moves the camera during calibration, such as a tour, scan or idle motion set up in the camera's firmware, or another NVR. Also, see the note above: Frigate's web UI and all other cameras will be unresponsive while calibration is in progress. This is expected and normal.
+If the camera never reports that it stopped, this is often caused by the same reason as the "MOVING" status error above: the `MoveStatus` ONVIF parameter is not changing due to a bug in your camera's firmware. It also happens when something else keeps the camera moving, such as a tour, scan or idle motion set up in the camera's firmware, or another NVR. If the log says `Calibration for <camera> failed: the camera was busy with another move`, something else moved the camera during calibration. Stop it and calibrate again.
 
 </FaqItem>
 
@@ -275,7 +275,7 @@ Watching Frigate's debug view can help to determine a possible cause. The autotr
 
 Frames from a camera always reach Frigate some time after the camera captured them. After a PTZ move, the camera reports that it has stopped while the frames Frigate is receiving still show it moving, or still show the scene from before the move. Moving again based on those frames would repeat the same correction and swing the camera past the object, and objects in them appear to jump, so tracking is lost.
 
-Frigate watches the video after every move and waits until it has stopped moving before it moves the camera again. How long that takes after the camera reports the move finished is logged at debug level for `frigate.ptz.autotrack`:
+Frigate watches the video after every move and waits until it has stopped moving before it moves the camera again. How long that takes after the camera reports the move finished is logged at debug level for `frigate.ptz.autotrack`, and calibration logs it at info level when it finishes:
 
 ```
 ptz: video settled 0.65s after PTZ stop and showed 98% of the commanded move, measured stream latency 0.64s

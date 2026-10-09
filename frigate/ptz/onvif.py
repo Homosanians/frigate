@@ -582,18 +582,19 @@ class OnvifController:
         except Exception as e:
             logger.warning(f"Onvif sending move request to {camera_name} failed: {e}")
 
-    async def _move_relative(self, camera_name: str, pan, tilt, zoom, speed) -> None:
+    async def _move_relative(self, camera_name: str, pan, tilt, zoom, speed) -> bool:
+        """Send a relative FOV move, returning False if it was not sent."""
         cam = self.cams[camera_name]
 
         if "pt-r-fov" not in cam["features"]:
             logger.error(f"{camera_name} does not support ONVIF RelativeMove (FOV).")
-            return
+            return False
 
         metrics = self.ptz_metrics.get(camera_name)
         camera_config = self.config.cameras.get(camera_name)
 
         if metrics is None or camera_config is None:
-            return
+            return False
 
         logger.debug(
             f"{camera_name} called RelativeMove: pan: {pan} tilt: {tilt} zoom: {zoom}"
@@ -603,7 +604,7 @@ class OnvifController:
             logger.warning(
                 f"{camera_name} is already performing an action, not moving..."
             )
-            return
+            return False
 
         cam["active"] = True
 
@@ -665,6 +666,8 @@ class OnvifController:
                 del move_request["Translation"]["Zoom"]
 
             cam["active"] = False
+
+        return True
 
     async def _move_to_preset(self, camera_name: str, preset: str) -> None:
         cam = self.cams[camera_name]

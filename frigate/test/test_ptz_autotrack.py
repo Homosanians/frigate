@@ -594,8 +594,39 @@ class TestCameraThatStopsAnswering(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(metrics.motor_stopped.is_set())
 
-    async def test_calibration_gives_up_on_a_camera_that_never_stops(self) -> None:
-        # calibration runs before Frigate starts its API, so it must end
+    async def test_calibration_waits_and_keeps_saying_so(self) -> None:
+        # calibration runs in the background, so it can wait for a slow camera
+        tracker = _make_tracker()
+        metrics = tracker.ptz_metrics[CAMERA]
+        metrics.motor_stopped.clear()
+        polls = [0]
+
+        async def status(camera):
+            polls[0] += 1
+            if polls[0] >= 200:
+                metrics.motor_stopped.set()
+
+        tracker.onvif.get_camera_status = AsyncMock(side_effect=status)
+
+        with (
+            patch("frigate.ptz.autotrack.time.time", side_effect=_ticking_clock()),
+            patch("frigate.ptz.autotrack.asyncio.sleep", new=AsyncMock()),
+            self.assertLogs("frigate.ptz.autotrack", level="WARNING") as logs,
+        ):
+            stopped = await tracker._wait_until_stopped(CAMERA, timeout=None)
+
+        self.assertTrue(stopped)
+        self.assertGreaterEqual(
+            len([line for line in logs.output if "still waiting" in line]), 2
+        )
+
+
+class TestCalibrationWithASlowCamera(unittest.IsolatedAsyncioTestCase):
+    """Some cameras take a long time to report IDLE. While they report MOVING,
+    Frigate holds back new commands, so a step sent too early is never made."""
+
+    def _tracker(self, idle_after: float):
+        # a camera that takes idle_after seconds to report any move finished
         tracker = _make_tracker()
         tracker.calibrating = {CAMERA: False}
         tracker.move_metrics = {CAMERA: []}
@@ -603,25 +634,119 @@ class TestCameraThatStopsAnswering(unittest.IsolatedAsyncioTestCase):
         tracker.move_coefficients = {CAMERA: []}
         tracker.zoom_time = {CAMERA: 0}
         metrics = tracker.ptz_metrics[CAMERA]
-        # like OnvifController, a move clears motor_stopped until IDLE is reported
-        tracker.onvif._move_relative = AsyncMock(
-            side_effect=lambda *args: metrics.motor_stopped.clear()
-        )
-        tracker.onvif._move_to_preset = AsyncMock()
-        tracker.onvif.get_camera_status = AsyncMock()
+        now = [1000.0]
+        moved_at = [0.0]
+
+        def clock() -> float:
+            now[0] += 1
+            return now[0]
+
+        def move(*args):
+            metrics.motor_stopped.clear()
+            moved_at[0] = now[0]
+            return True
+
+        async def status(camera):
+            if now[0] - moved_at[0] >= idle_after:
+                metrics.motor_stopped.set()
+
+        tracker.onvif._move_relative = AsyncMock(side_effect=move)
+        tracker.onvif._move_to_preset = AsyncMock(side_effect=move)
+        tracker.onvif.get_camera_status = AsyncMock(side_effect=status)
+        return tracker, clock
+
+    async def test_waits_for_a_camera_that_is_slow_to_report_idle(self) -> None:
+        tracker, clock = self._tracker(idle_after=90)
 
         with (
-            patch("frigate.ptz.autotrack.time.time", side_effect=_ticking_clock()),
+            patch("frigate.ptz.autotrack.time.time", side_effect=clock),
+            patch("frigate.ptz.autotrack.asyncio.sleep", new=AsyncMock()),
+            patch("frigate.ptz.autotrack.update_yaml_file_bulk"),
+        ):
+            await tracker._calibrate_camera(CAMERA)
+
+        steps = tracker.move_metrics[CAMERA]
+        self.assertEqual(len(steps), 30)
+        self.assertTrue(
+            all(step["end_timestamp"] - step["start_timestamp"] >= 85 for step in steps)
+        )
+        self.assertFalse(tracker.calibrating[CAMERA])
+
+    async def test_a_step_that_was_not_sent_is_not_recorded(self) -> None:
+        tracker, clock = self._tracker(idle_after=2)
+        # the camera is busy, so the command never goes out
+        tracker.onvif._move_relative = AsyncMock(return_value=False)
+
+        with (
+            patch("frigate.ptz.autotrack.time.time", side_effect=clock),
             patch("frigate.ptz.autotrack.asyncio.sleep", new=AsyncMock()),
             patch("frigate.ptz.autotrack.update_yaml_file_bulk") as save_weights,
         ):
             await tracker._calibrate_camera(CAMERA)
 
+        self.assertEqual(tracker.move_metrics[CAMERA], [])
         self.assertFalse(tracker.calibrating[CAMERA])
         save_weights.assert_not_called()
-        self.assertEqual(
-            tracker.config.cameras[CAMERA].onvif.autotracking.movement_weights, []
-        )
+
+
+class TestBackgroundCalibration(unittest.IsolatedAsyncioTestCase):
+    """Calibration takes minutes and Frigate starts the autotracker before its
+    API, so calibration must not hold up startup."""
+
+    def _tracker(self) -> PtzAutoTracker:
+        tracker = _make_tracker()
+        tracker.config.cameras[CAMERA].onvif.autotracking.calibrate_on_startup = True
+        tracker.tracked_object_history = {}
+        tracker.tracked_object_metrics = {}
+        tracker.calibrating = {}
+        tracker.move_metrics = {}
+        tracker.intercept = {}
+        tracker.move_coefficients = {}
+        tracker.zoom_time = {}
+        tracker.move_queues = {}
+        tracker.move_queue_locks = {}
+        tracker.calibration_tasks = {}
+        tracker.onvif.cams = {CAMERA: {"init": True, "features": ["pt-r-fov"]}}
+        tracker.onvif.get_camera_status = AsyncMock()
+        tracker.onvif.loop = asyncio.get_running_loop()
+        tracker._process_move_queue = AsyncMock()
+        return tracker
+
+    async def test_setup_does_not_wait_for_calibration(self) -> None:
+        tracker = self._tracker()
+        done = asyncio.Event()
+
+        async def calibrate(camera):
+            tracker.calibrating[camera] = True
+            await done.wait()
+
+        tracker._calibrate_camera = calibrate
+        camera_config = tracker.config.cameras[CAMERA]
+
+        await asyncio.wait_for(tracker._autotracker_setup(camera_config, CAMERA), 1)
+
+        self.assertTrue(tracker.autotracker_init[CAMERA])
+        self.assertTrue(tracker.calibrating[CAMERA])
+
+        done.set()
+        await tracker.calibration_tasks[CAMERA]
+
+        self.assertFalse(tracker.calibrating[CAMERA])
+
+    async def test_failed_calibration_lets_tracking_start(self) -> None:
+        tracker = self._tracker()
+
+        async def calibrate(camera):
+            tracker.calibrating[camera] = True
+            raise ConnectionError("camera unreachable")
+
+        tracker._calibrate_camera = calibrate
+        camera_config = tracker.config.cameras[CAMERA]
+
+        await tracker._autotracker_setup(camera_config, CAMERA)
+        await tracker.calibration_tasks[CAMERA]
+
+        self.assertFalse(tracker.calibrating[CAMERA])
 
 
 class TestReturnToPreset(unittest.IsolatedAsyncioTestCase):

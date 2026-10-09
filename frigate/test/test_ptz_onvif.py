@@ -236,6 +236,16 @@ class TestMoveTimestamps(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(metrics.start_time.value, 1000.15)
 
+    async def test_move_reports_whether_it_was_sent(self) -> None:
+        controller = _make_move_controller(autotracking_enabled=True)
+
+        self.assertTrue(await controller._move_relative(CAMERA, 0.25, 0, 0, 1))
+
+        # a camera that is still busy with another move is not sent the command
+        controller.cams[CAMERA]["active"] = True
+        self.assertFalse(await controller._move_relative(CAMERA, 0.25, 0, 0, 1))
+        controller.cams[CAMERA]["ptz"].RelativeMove.assert_awaited_once()
+
     async def test_failed_move_does_not_leave_the_camera_busy(self) -> None:
         # otherwise every later move is refused as already in progress
         controller = _make_move_controller(autotracking_enabled=True)
