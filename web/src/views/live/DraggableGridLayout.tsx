@@ -201,6 +201,8 @@ export default function DraggableGridLayout({
 
   const [globalAutoLive] = useUserPersistence("autoLiveView", true);
   const [displayCameraNames] = useUserPersistence("displayCameraNames", false);
+  const [seamlessSetting] = useUserPersistence("seamlessLiveTiles", false);
+  const seamlessTiles = seamlessSetting ?? false;
 
   const { allGroupsStreamingSettings, setAllGroupsStreamingSettings } =
     useStreamingSettings();
@@ -691,7 +693,10 @@ export default function DraggableGridLayout({
         </div>
       ) : (
         <div
-          className="no-scrollbar my-2 select-none overflow-x-hidden pb-8"
+          className={cn(
+            "no-scrollbar select-none overflow-x-hidden pb-8",
+            !seamlessTiles && "my-2",
+          )}
           ref={attachGridContainer}
         >
           <EditGroupDialog
@@ -721,7 +726,7 @@ export default function DraggableGridLayout({
             }}
             margin={[0, 0]}
             compactor={FREE_PLACEMENT_COMPACTOR}
-            containerPadding={[0, isEditMode ? 6 : 3]}
+            containerPadding={[0, isEditMode ? 6 : seamlessTiles ? 0 : 3]}
             resizeConfig={{
               enabled: isEditMode,
               // se only: top/left handles fight the aspect constraint at a grid
@@ -746,6 +751,7 @@ export default function DraggableGridLayout({
                 birdseyeConfig={birdseyeConfig}
                 aspectRatio={layoutAspects["birdseye"] ?? DEFAULT_ASPECT}
                 liveMode={birdseyeConfig.restream ? "mse" : "jsmpeg"}
+                seamless={seamlessTiles}
                 onClick={() => onSelectCamera("birdseye")}
               ></BirdseyeLivePlayerGridItem>
             )}
@@ -778,7 +784,8 @@ export default function DraggableGridLayout({
                   ?.compatibilityMode || false;
               return (
                 <GridLiveContextMenu
-                  className={CARD_FIT}
+                  className={seamlessTiles ? "size-full" : CARD_FIT}
+                  seamless={seamlessTiles}
                   aspectRatio={
                     (naturalAspectLayout
                       ? liveAspects[camera.name]
@@ -821,11 +828,14 @@ export default function DraggableGridLayout({
                     autoLive={autoLive ?? globalAutoLive}
                     showStillWithoutActivity={showStillWithoutActivity ?? true}
                     alwaysShowCameraName={displayCameraNames}
+                    seamless={seamlessTiles}
                     useWebGL={useWebGL}
                     cameraRef={cameraRef}
                     className={cn(
                       "size-full",
-                      naturalAspectLayout ? "bg-background" : "bg-black",
+                      naturalAspectLayout && !seamlessTiles
+                        ? "bg-background"
+                        : "bg-black",
                       isEditMode &&
                         showCircles &&
                         "outline-2 outline-muted-foreground hover:cursor-grab hover:outline-4 active:cursor-grabbing",
@@ -944,6 +954,7 @@ type BirdseyeLivePlayerGridItemProps = {
   birdseyeConfig: BirdseyeConfig;
   aspectRatio: number;
   liveMode: LivePlayerMode;
+  seamless: boolean;
   onClick: () => void;
 };
 
@@ -962,6 +973,7 @@ const BirdseyeLivePlayerGridItem = React.forwardRef<
       birdseyeConfig,
       aspectRatio: cellAspect,
       liveMode,
+      seamless,
       onClick,
       ...props
     },
@@ -969,7 +981,10 @@ const BirdseyeLivePlayerGridItem = React.forwardRef<
   ) => {
     return (
       <div
-        className="flex items-center justify-center p-1 [container-type:size]"
+        className={cn(
+          "flex items-center justify-center [container-type:size]",
+          seamless ? "p-0" : "p-1",
+        )}
         style={{ ...style, "--ar": cellAspect } as React.CSSProperties}
         ref={ref}
         onMouseDown={onMouseDown}
@@ -978,9 +993,10 @@ const BirdseyeLivePlayerGridItem = React.forwardRef<
         {...props}
       >
         <BirdseyeLivePlayer
-          className={cn(CARD_FIT, className)}
+          className={cn(seamless ? "size-full" : CARD_FIT, className)}
           birdseyeConfig={birdseyeConfig}
           liveMode={liveMode}
+          seamless={seamless}
           onClick={onClick}
           containerRef={ref as React.RefObject<HTMLDivElement>}
         />
@@ -994,6 +1010,7 @@ type GridLiveContextMenuProps = {
   className?: string;
   style?: React.CSSProperties;
   aspectRatio?: number;
+  seamless: boolean;
   onMouseDown?: React.MouseEventHandler<HTMLDivElement>;
   onMouseUp?: React.MouseEventHandler<HTMLDivElement>;
   onTouchEnd?: React.TouchEventHandler<HTMLDivElement>;
@@ -1026,6 +1043,7 @@ const GridLiveContextMenu = React.forwardRef<
       className,
       style,
       aspectRatio: cameraAspect,
+      seamless,
       onMouseDown,
       onMouseUp,
       onTouchEnd,
@@ -1053,7 +1071,10 @@ const GridLiveContextMenu = React.forwardRef<
   ) => {
     return (
       <div
-        className="flex items-center justify-center p-1 [container-type:size]"
+        className={cn(
+          "flex items-center justify-center [container-type:size]",
+          seamless ? "p-0" : "p-1",
+        )}
         style={{ ...style, "--ar": cameraAspect } as React.CSSProperties}
         ref={ref}
         onMouseDown={onMouseDown}

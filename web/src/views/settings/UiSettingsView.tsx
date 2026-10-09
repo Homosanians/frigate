@@ -335,6 +335,10 @@ export default function UiSettingsView() {
     "displayCameraNames",
     false,
   );
+  const [seamlessTiles, setSeamlessTiles] = useUserPersistence(
+    "seamlessLiveTiles",
+    false,
+  );
   const [naturalAspect, setNaturalAspect] = useUserPersistence(
     "naturalAspectLayout",
     false,
@@ -428,6 +432,13 @@ export default function UiSettingsView() {
       description: t("general.liveDashboard.displayCameraNames.desc"),
       checked: cameraNames,
       onCheckedChange: setCameraName,
+    },
+    {
+      id: "seamless-tiles",
+      label: t("general.liveDashboard.seamlessTiles.label"),
+      description: t("general.liveDashboard.seamlessTiles.desc"),
+      checked: seamlessTiles,
+      onCheckedChange: setSeamlessTiles,
     },
     // phones use the static grid, so tile sizing has nothing to affect there
     ...(isMobileOnly

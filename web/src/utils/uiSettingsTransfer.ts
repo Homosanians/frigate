@@ -55,6 +55,12 @@ export const TRANSFER_KEYS: TransferKey[] = [
     schema: z.boolean(),
   },
   {
+    key: "seamlessLiveTiles",
+    section: "preferences",
+    namespaced: true,
+    schema: z.boolean(),
+  },
+  {
     key: "naturalAspectLayout",
     section: "preferences",
     namespaced: true,

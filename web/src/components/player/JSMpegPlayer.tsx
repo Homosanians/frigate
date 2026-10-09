@@ -14,6 +14,7 @@ type JSMpegPlayerProps = {
   containerRef: React.MutableRefObject<HTMLDivElement | null>;
   playbackEnabled: boolean;
   useWebGL: boolean;
+  rounded?: boolean;
   setStats?: (stats: PlayerStatsType) => void;
   onPlaying?: () => void;
 };
@@ -26,6 +27,7 @@ export default function JSMpegPlayer({
   containerRef,
   playbackEnabled,
   useWebGL = false,
+  rounded = true,
   setStats,
   onPlaying,
 }: JSMpegPlayerProps) {
@@ -247,7 +249,7 @@ export default function JSMpegPlayer({
         >
           <canvas
             ref={canvasRef}
-            className="rounded-lg md:rounded-2xl"
+            className={cn(rounded && "rounded-lg md:rounded-2xl")}
             style={{
               width: scaledWidth,
               height: scaledHeight,
