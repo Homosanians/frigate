@@ -70,7 +70,8 @@
       "title": "PTZ presets",
       "desc": "Presets are stored on the camera. Saving always stores the camera's current position.",
       "empty": "This camera has no presets yet.",
-      "count": "{{count}} of {{max}} presets",
+      "count_one": "{{count}} of {{max}} presets",
+      "count_other": "{{count}} of {{max}} presets",
       "goto": "Move to preset",
       "create": {
         "label": "Save current position as preset…",
