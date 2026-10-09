@@ -591,3 +591,40 @@ class TestNoticeWiring(unittest.TestCase):
         self.dispatcher.publish_runtime_snapshot(publisher)
 
         publisher.assert_any_call("notices", '[{"id": "detector_stuck:ov"}]', False)
+
+
+class TestCameraActivitySnapshot(unittest.TestCase):
+    """Verify the reconnect snapshot reports video loss without clock skew."""
+
+    def setUp(self) -> None:
+        self.dispatcher = _build_dispatcher(
+            {"front_door": _make_camera_mock(), "backyard": _make_camera_mock()}
+        )
+        self.dispatcher.web_push_client = None
+
+    def _snapshot_at(self, now: float) -> dict:
+        with patch("frigate.comms.dispatcher.datetime") as mock_datetime:
+            mock_datetime.datetime.now.return_value.timestamp.return_value = now
+            camera_status, _ = self.dispatcher._build_camera_activity_snapshot()
+
+        return camera_status
+
+    def test_video_loss_is_reported_as_elapsed_seconds(self) -> None:
+        self.dispatcher.camera_activity.last_camera_activity = {
+            "front_door": {"video_loss_since": 1000.0},
+            "backyard": {"motion": False},
+        }
+
+        camera_status = self._snapshot_at(1030.0)
+
+        self.assertEqual(camera_status["front_door"]["video_loss_seconds"], 30.0)
+        self.assertNotIn("video_loss_seconds", camera_status["backyard"])
+
+    def test_video_loss_elapsed_is_never_negative(self) -> None:
+        self.dispatcher.camera_activity.last_camera_activity = {
+            "front_door": {"video_loss_since": 1000.0},
+        }
+
+        camera_status = self._snapshot_at(990.0)
+
+        self.assertEqual(camera_status["front_door"]["video_loss_seconds"], 0.0)

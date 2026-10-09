@@ -173,10 +173,20 @@ class Dispatcher:
         }
         audio_detections = self.audio_activity.current_audio_detections.copy()
         cameras_with_status = camera_status.keys()
+        now = datetime.datetime.now().timestamp()
 
         for camera in self.config.cameras.keys():
             if camera not in cameras_with_status:
                 camera_status[camera] = {}
+
+            # elapsed rather than a timestamp, so clients need not share the
+            # server's clock
+            video_loss_since = camera_status[camera].get("video_loss_since")
+
+            if video_loss_since is not None:
+                camera_status[camera]["video_loss_seconds"] = max(
+                    0.0, now - video_loss_since
+                )
 
             camera_status[camera]["config"] = {
                 "detect": self.config.cameras[camera].detect.enabled,

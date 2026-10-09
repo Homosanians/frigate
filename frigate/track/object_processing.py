@@ -4,6 +4,7 @@ import json
 import logging
 import queue
 import threading
+import time
 from collections import defaultdict
 from enum import Enum
 from multiprocessing import Queue as MpQueue
@@ -15,6 +16,7 @@ import numpy as np
 from peewee import SQL, DoesNotExist
 
 from frigate.camera.state import CameraState
+from frigate.camera.video_loss import VideoLossTracker
 from frigate.comms.detections_updater import DetectionPublisher, DetectionTypeEnum
 from frigate.comms.dispatcher import Dispatcher
 from frigate.comms.event_metadata_updater import (
@@ -36,6 +38,7 @@ from frigate.config.camera.updater import (
 )
 from frigate.const import (
     FAST_QUEUE_TIMEOUT,
+    REPLAY_CAMERA_PREFIX,
     UPDATE_CAMERA_ACTIVITY,
     UPSERT_REVIEW_SEGMENT,
 )
@@ -96,6 +99,8 @@ class TrackedObjectProcessor(threading.Thread):
 
         self.camera_activity: dict[str, dict[str, Any]] = {}
         self.ongoing_manual_events: dict[str, str] = {}
+        self.video_loss = VideoLossTracker()
+        self.last_video_loss_check = 0.0
 
         # {
         #   'zone_name': {
@@ -341,6 +346,55 @@ class TrackedObjectProcessor(threading.Thread):
                 )
                 # reset the last_motion so redundant `off` commands aren't sent
                 self.last_motion_detected[camera] = 0
+
+    def check_video_loss(self) -> None:
+        """Publish each camera's video loss state when it changes."""
+        now = datetime.datetime.now().timestamp()
+
+        for camera, camera_state in self.camera_states.items():
+            camera_config = self.config.cameras.get(camera)
+
+            if (
+                camera_config is None
+                or not camera_config.enabled_in_config
+                or camera.startswith(REPLAY_CAMERA_PREFIX)
+            ):
+                continue
+
+            update = self.video_loss.update(
+                camera,
+                now,
+                camera_state.current_frame_time,
+                camera_config.enabled,
+                float(camera_config.ffmpeg.retry_interval or 10),
+            )
+
+            if update is None:
+                continue
+
+            # the activity snapshot tells clients that connect later; the first
+            # frame after a loss replaces this activity, which clears it. It
+            # goes first so a snapshot never arrives after the topic and
+            # contradicts it.
+            activity = self.camera_activity.get(camera, {})
+
+            if update.lost or "video_loss_since" in activity:
+                activity = {
+                    key: value
+                    for key, value in activity.items()
+                    if key != "video_loss_since"
+                }
+
+                if update.lost:
+                    activity["video_loss_since"] = update.last_frame_time
+
+                self.camera_activity[camera] = activity
+                self.requestor.send_data(UPDATE_CAMERA_ACTIVITY, self.camera_activity)
+
+            # the UI's signal only, so it stays off MQTT
+            self.dispatcher.publish_local(
+                f"{camera}/video_loss", "ON" if update.lost else "OFF"
+            )
 
     def get_camera_state(self, camera: str) -> CameraState | None:
         """Returns the state for a camera, or None if it does not exist."""
@@ -754,6 +808,7 @@ class TrackedObjectProcessor(threading.Thread):
 
                     self.camera_activity.pop(camera, None)
                     self.last_motion_detected.pop(camera, None)
+                    self.video_loss.remove(camera)
 
                 self.requestor.send_data(UPDATE_CAMERA_ACTIVITY, self.camera_activity)
 
@@ -804,6 +859,12 @@ class TrackedObjectProcessor(threading.Thread):
                     self.create_manual_event(payload)
                 elif topic.endswith(EventMetadataTypeEnum.manual_event_end.value):
                     self.end_manual_event(payload)
+
+            # before the queue read, which skips the rest of the loop when no
+            # camera is sending frames
+            if time.monotonic() - self.last_video_loss_check >= 1:
+                self.last_video_loss_check = time.monotonic()
+                self.check_video_loss()
 
             try:
                 (
