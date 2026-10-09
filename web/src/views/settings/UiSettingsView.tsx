@@ -45,6 +45,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { LiveVideoFit } from "@/types/live";
 import ImportUiSettingsDialog from "@/components/overlay/dialog/ImportUiSettingsDialog";
 import {
   applyImportPayload,
@@ -61,6 +62,7 @@ import {
 } from "@/utils/uiSettingsTransfer";
 
 const WEEK_STARTS_ON = ["Sunday", "Monday"];
+const VIDEO_FITS: LiveVideoFit[] = ["contain", "fill", "cover"];
 const IMPORT_FAILED_FLAG = "frigate-ui-settings-import-failed";
 
 type ConfirmTarget = "layouts" | "streaming" | "naturalAspect";
@@ -339,6 +341,10 @@ export default function UiSettingsView() {
     "seamlessLiveTiles",
     false,
   );
+  const [videoFit, setVideoFit] = useUserPersistence<LiveVideoFit>(
+    "liveVideoFit",
+    "contain",
+  );
   const [naturalAspect, setNaturalAspect] = useUserPersistence(
     "naturalAspectLayout",
     false,
@@ -354,6 +360,14 @@ export default function UiSettingsView() {
   const [pendingConfirm, setPendingConfirm] = useState<ConfirmTarget | null>(
     null,
   );
+
+  // literal keys per value: a template key would be invisible to
+  // npm run i18n:extract, which CI verifies
+  const videoFitLabels: Record<LiveVideoFit, string> = {
+    contain: t("general.liveDashboard.videoFit.contain"),
+    fill: t("general.liveDashboard.videoFit.fill"),
+    cover: t("general.liveDashboard.videoFit.cover"),
+  };
 
   const confirmCopy = useCallback(
     (target: ConfirmTarget) => {
@@ -466,6 +480,40 @@ export default function UiSettingsView() {
               {liveDashboardSwitchRows.map((row) => (
                 <SwitchSettingRow key={row.id} {...row} />
               ))}
+
+              <ValueSettingRow
+                id="live-video-fit"
+                label={t("general.liveDashboard.videoFit.label")}
+                description={t("general.liveDashboard.videoFit.desc")}
+                control={
+                  <Select
+                    value={videoFit}
+                    onValueChange={(value) =>
+                      setVideoFit(value as LiveVideoFit)
+                    }
+                  >
+                    <SelectTrigger
+                      id="live-video-fit"
+                      className="w-full md:w-36"
+                    >
+                      {videoFitLabels[videoFit ?? "contain"]}
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {VIDEO_FITS.map((fit) => (
+                          <SelectItem
+                            key={fit}
+                            className="cursor-pointer"
+                            value={fit}
+                          >
+                            {videoFitLabels[fit]}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                }
+              />
 
               <ValueSettingRow
                 id="live-fallback-timeout"

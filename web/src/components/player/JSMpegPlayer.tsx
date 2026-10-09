@@ -1,7 +1,8 @@
 import { baseUrl } from "@/api/baseUrl";
 import { useResizeObserver } from "@/hooks/resize-observer";
 import { cn } from "@/lib/utils";
-import { PlayerStatsType } from "@/types/live";
+import { LiveVideoFit, PlayerStatsType } from "@/types/live";
+import { VIDEO_FIT_CLASS } from "@/utils/videoUtil";
 // @ts-expect-error we know this doesn't have types
 import JSMpeg from "@cycjimmy/jsmpeg-player";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -15,6 +16,7 @@ type JSMpegPlayerProps = {
   playbackEnabled: boolean;
   useWebGL: boolean;
   rounded?: boolean;
+  fit?: LiveVideoFit;
   setStats?: (stats: PlayerStatsType) => void;
   onPlaying?: () => void;
 };
@@ -28,6 +30,7 @@ export default function JSMpegPlayer({
   playbackEnabled,
   useWebGL = false,
   rounded = true,
+  fit = "contain",
   setStats,
   onPlaying,
 }: JSMpegPlayerProps) {
@@ -235,7 +238,12 @@ export default function JSMpegPlayer({
   }, [hasData]);
 
   return (
-    <div className={cn(className, !containerRef.current && "size-full")}>
+    <div
+      className={cn(
+        className,
+        (!containerRef.current || fit !== "contain") && "size-full",
+      )}
+    >
       <div
         className="internal-jsmpeg-container size-full"
         ref={internalContainerRef}
@@ -249,11 +257,19 @@ export default function JSMpegPlayer({
         >
           <canvas
             ref={canvasRef}
-            className={cn(rounded && "rounded-lg md:rounded-2xl")}
-            style={{
-              width: scaledWidth,
-              height: scaledHeight,
-            }}
+            className={cn(
+              rounded && "rounded-lg md:rounded-2xl",
+              // stretch and crop fill the container instead of the scaled size
+              fit !== "contain" && ["size-full", VIDEO_FIT_CLASS[fit]],
+            )}
+            style={
+              fit === "contain"
+                ? {
+                    width: scaledWidth,
+                    height: scaledHeight,
+                  }
+                : undefined
+            }
           ></canvas>
         </div>
       </div>

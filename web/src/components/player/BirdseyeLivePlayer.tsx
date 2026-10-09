@@ -3,7 +3,8 @@ import { BirdseyeConfig } from "@/types/frigateConfig";
 import ActivityIndicator from "../indicators/activity-indicator";
 import JSMpegPlayer from "./JSMpegPlayer";
 import MSEPlayer from "./MsePlayer";
-import { LivePlayerMode } from "@/types/live";
+import { LivePlayerMode, LiveVideoFit } from "@/types/live";
+import { VIDEO_FIT_CLASS } from "@/utils/videoUtil";
 import { cn } from "@/lib/utils";
 import React from "react";
 import { ImageShadowOverlay } from "../overlay/ImageShadowOverlay";
@@ -16,6 +17,7 @@ type LivePlayerProps = {
   containerRef: React.MutableRefObject<HTMLDivElement | null>;
   playerRef?: React.MutableRefObject<HTMLDivElement | null>;
   seamless?: boolean;
+  videoFit?: LiveVideoFit;
   onClick?: () => void;
 };
 
@@ -27,14 +29,27 @@ export default function BirdseyeLivePlayer({
   containerRef,
   playerRef,
   seamless = false,
+  videoFit = "contain",
   onClick,
 }: LivePlayerProps) {
   let player;
   if (liveMode == "webrtc") {
-    player = <WebRtcPlayer className="size-full" camera="birdseye" pip={pip} />;
+    player = (
+      <WebRtcPlayer
+        className={cn("size-full", VIDEO_FIT_CLASS[videoFit])}
+        camera="birdseye"
+        pip={pip}
+      />
+    );
   } else if (liveMode == "mse") {
     if ("MediaSource" in window || "ManagedMediaSource" in window) {
-      player = <MSEPlayer className="size-full" camera="birdseye" pip={pip} />;
+      player = (
+        <MSEPlayer
+          className={cn("size-full", VIDEO_FIT_CLASS[videoFit])}
+          camera="birdseye"
+          pip={pip}
+        />
+      );
     } else {
       player = (
         <div className="w-5xl text-center text-sm">
@@ -53,6 +68,7 @@ export default function BirdseyeLivePlayer({
         playbackEnabled={true}
         useWebGL={true}
         rounded={!seamless}
+        fit={videoFit}
       />
     );
   } else {
@@ -78,7 +94,14 @@ export default function BirdseyeLivePlayer({
           } as React.CSSProperties
         }
       >
-        <div className="relative aspect-[var(--pic-ar)] h-auto w-[min(100%,calc(100cqh*var(--pic-ar)))]">
+        <div
+          className={cn(
+            "relative",
+            videoFit === "contain"
+              ? "aspect-[var(--pic-ar)] h-auto w-[min(100%,calc(100cqh*var(--pic-ar)))]"
+              : "size-full",
+          )}
+        >
           <ImageShadowOverlay />
         </div>
       </div>

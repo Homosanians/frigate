@@ -26,6 +26,7 @@ import {
   LivePlayerError,
   LivePlayerMode,
   LiveStreamMetadata,
+  LiveVideoFit,
   StatsState,
   VolumeState,
 } from "@/types/live";
@@ -203,6 +204,11 @@ export default function DraggableGridLayout({
   const [displayCameraNames] = useUserPersistence("displayCameraNames", false);
   const [seamlessSetting] = useUserPersistence("seamlessLiveTiles", false);
   const seamlessTiles = seamlessSetting ?? false;
+  const [videoFitSetting] = useUserPersistence<LiveVideoFit>(
+    "liveVideoFit",
+    "contain",
+  );
+  const videoFit = videoFitSetting ?? "contain";
 
   const { allGroupsStreamingSettings, setAllGroupsStreamingSettings } =
     useStreamingSettings();
@@ -752,6 +758,7 @@ export default function DraggableGridLayout({
                 aspectRatio={layoutAspects["birdseye"] ?? DEFAULT_ASPECT}
                 liveMode={birdseyeConfig.restream ? "mse" : "jsmpeg"}
                 seamless={seamlessTiles}
+                videoFit={videoFit}
                 onClick={() => onSelectCamera("birdseye")}
               ></BirdseyeLivePlayerGridItem>
             )}
@@ -787,7 +794,9 @@ export default function DraggableGridLayout({
                   className={seamlessTiles ? "size-full" : CARD_FIT}
                   seamless={seamlessTiles}
                   aspectRatio={
-                    (naturalAspectLayout
+                    // a stretched or cropped picture takes the card's shape,
+                    // so the card keeps its cell's shape too
+                    (naturalAspectLayout && videoFit === "contain"
                       ? liveAspects[camera.name]
                       : undefined) ??
                     layoutAspects[camera.name] ??
@@ -829,6 +838,7 @@ export default function DraggableGridLayout({
                     showStillWithoutActivity={showStillWithoutActivity ?? true}
                     alwaysShowCameraName={displayCameraNames}
                     seamless={seamlessTiles}
+                    videoFit={videoFit}
                     useWebGL={useWebGL}
                     cameraRef={cameraRef}
                     className={cn(
@@ -955,6 +965,7 @@ type BirdseyeLivePlayerGridItemProps = {
   aspectRatio: number;
   liveMode: LivePlayerMode;
   seamless: boolean;
+  videoFit: LiveVideoFit;
   onClick: () => void;
 };
 
@@ -974,6 +985,7 @@ const BirdseyeLivePlayerGridItem = React.forwardRef<
       aspectRatio: cellAspect,
       liveMode,
       seamless,
+      videoFit,
       onClick,
       ...props
     },
@@ -997,6 +1009,7 @@ const BirdseyeLivePlayerGridItem = React.forwardRef<
           birdseyeConfig={birdseyeConfig}
           liveMode={liveMode}
           seamless={seamless}
+          videoFit={videoFit}
           onClick={onClick}
           containerRef={ref as React.RefObject<HTMLDivElement>}
         />

@@ -1,4 +1,11 @@
+import { LiveVideoFit } from "@/types/live";
 import { Recording } from "@/types/record";
+
+export const VIDEO_FIT_CLASS: Record<LiveVideoFit, string> = {
+  contain: "object-contain",
+  fill: "object-fill",
+  cover: "object-cover",
+};
 
 /** the HLS endpoint returns the vod segments with the first
  * segment of the hour trimmed, meaning it will start at

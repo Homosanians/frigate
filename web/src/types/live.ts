@@ -1,4 +1,7 @@
 export type LivePlayerMode = "webrtc" | "mse" | "jsmpeg" | "debug";
+// how a picture fills a tile of a different shape: letterboxed, stretched,
+// or cropped
+export type LiveVideoFit = "contain" | "fill" | "cover";
 export type VideoResolutionType = {
   width: number;
   height: number;

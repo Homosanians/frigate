@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CameraImage from "./CameraImage";
+import { LiveVideoFit } from "@/types/live";
 
 type AutoUpdatingCameraImageProps = {
   camera: string;
@@ -10,6 +11,7 @@ type AutoUpdatingCameraImageProps = {
   reloadInterval?: number;
   periodicCache?: boolean;
   rounded?: boolean;
+  fit?: LiveVideoFit;
 };
 
 const MIN_LOAD_TIMEOUT_MS = 200;
@@ -23,6 +25,7 @@ export default function AutoUpdatingCameraImage({
   reloadInterval = MIN_LOAD_TIMEOUT_MS,
   periodicCache = false,
   rounded = true,
+  fit = "contain",
 }: AutoUpdatingCameraImageProps) {
   const [key, setKey] = useState(Date.now());
   const [fps, setFps] = useState<string>("0");
@@ -97,6 +100,7 @@ export default function AutoUpdatingCameraImage({
         searchParams={cacheKey}
         className={cameraClasses}
         rounded={rounded}
+        fit={fit}
       />
       {showFps ? <span className="text-xs">Displaying at {fps}fps</span> : null}
     </div>
