@@ -586,7 +586,14 @@ class PtzAutoTracker(threading.Thread):
     async def _wait_until_video_settled(self, camera: str) -> None:
         """Wait for the camera process to see the latest move end in the video."""
         metrics = self.ptz_metrics[camera]
-        deadline = time.time() + AUTOTRACKING_SETTLE_TIMEOUT + 1
+        now = time.time()
+
+        # calibration on startup runs before the camera processes deliver
+        # frames, so there is no video to wait for
+        if now - metrics.frame_time.value > AUTOTRACKING_SETTLE_TIMEOUT:
+            return
+
+        deadline = now + AUTOTRACKING_SETTLE_TIMEOUT + 1
 
         while (
             metrics.video_stop_time.value <= metrics.start_time.value

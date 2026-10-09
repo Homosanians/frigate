@@ -500,6 +500,37 @@ class TestMotionEstimatorKeepsWatching(unittest.TestCase):
         estimator._estimate.assert_not_called()
 
 
+class TestWaitUntilVideoSettled(unittest.IsolatedAsyncioTestCase):
+    async def test_no_wait_without_video(self) -> None:
+        # calibration on startup runs before the camera processes deliver frames
+        tracker = _make_tracker()
+        metrics = tracker.ptz_metrics[CAMERA]
+        metrics.start_time.value = 1000.0
+
+        with (
+            patch("frigate.ptz.autotrack.time.time", return_value=1000.5),
+            patch("frigate.ptz.autotrack.asyncio.sleep", new=AsyncMock()) as sleep,
+        ):
+            await tracker._wait_until_video_settled(CAMERA)
+
+        sleep.assert_not_awaited()
+
+    async def test_waits_while_frames_arrive(self) -> None:
+        tracker = _make_tracker()
+        metrics = tracker.ptz_metrics[CAMERA]
+        metrics.start_time.value = 1000.0
+        metrics.frame_time.value = 1000.4
+        clock = iter([1000.5] + [1000.5 + i for i in range(20)])
+
+        with (
+            patch("frigate.ptz.autotrack.time.time", side_effect=lambda: next(clock)),
+            patch("frigate.ptz.autotrack.asyncio.sleep", new=AsyncMock()) as sleep,
+        ):
+            await tracker._wait_until_video_settled(CAMERA)
+
+        sleep.assert_awaited()
+
+
 class TestReturnToPreset(unittest.IsolatedAsyncioTestCase):
     async def test_return_is_timed_like_a_move(self) -> None:
         # the video keeps showing the return after the camera reports it done,

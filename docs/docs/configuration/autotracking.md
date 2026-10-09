@@ -149,7 +149,7 @@ After calibration has ended, your PTZ will be moved to the preset specified by `
 
 :::note
 
-Frigate's web UI and all other cameras will be unresponsive while calibration is in progress. This is expected and normal to avoid excessive network traffic or CPU usage during calibration. Calibration for most PTZs will take about two minutes, plus about a minute for every second of stream latency, since Frigate waits for each move to show in the video. The Frigate log will show calibration progress and any errors.
+Frigate's web UI and all other cameras will be unresponsive while calibration is in progress. This is expected and normal to avoid excessive network traffic or CPU usage during calibration. Calibration for most PTZs will take about two minutes. The Frigate log will show calibration progress and any errors.
 
 :::
 
@@ -273,7 +273,7 @@ Watching Frigate's debug view can help to determine a possible cause. The autotr
 
 Frames from a camera always reach Frigate some time after the camera captured them. After a PTZ move, the camera reports that it has stopped while the frames Frigate is receiving still show it moving, or still show the scene from before the move. Moving again based on those frames would repeat the same correction and swing the camera past the object, and objects in them appear to jump, so tracking is lost.
 
-Frigate watches the video after every move and waits until it has stopped moving before it moves the camera again. How long that takes after the camera reports the move finished is logged at debug level for `frigate.ptz.autotrack`, and calibration logs it at info level when it finishes:
+Frigate watches the video after every move and waits until it has stopped moving before it moves the camera again. How long that takes after the camera reports the move finished is logged at debug level for `frigate.ptz.autotrack`:
 
 ```
 ptz: video settled 0.65s after PTZ stop and showed 98% of the commanded move, measured stream latency 0.64s
