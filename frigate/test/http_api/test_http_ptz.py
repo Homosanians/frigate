@@ -1,4 +1,4 @@
-"""Unit tests for the PTZ preset and home position management endpoints."""
+"""Unit tests for the PTZ preset/home management and ONVIF device endpoints."""
 
 import asyncio
 import threading
@@ -11,6 +11,14 @@ from frigate.test.http_api.base_http_test import AuthTestClient, BaseTestHttp
 
 CAMERA = "front_door"
 VIEWER = {"remote-user": "viewer", "remote-role": "viewer"}
+DEVICE_INFO = {
+    "manufacturer": "Acme",
+    "model": "Dome 4",
+    "firmware_version": "1.2.3",
+    "conformance_profiles": ["S", "T"],
+    "date_time": None,
+    "ntp": None,
+}
 
 
 class CameraFault(Exception):
@@ -43,6 +51,7 @@ class TestHttpPtz(BaseTestHttp):
             set_preset=AsyncMock(return_value="token_1"),
             remove_preset=AsyncMock(),
             set_home=AsyncMock(),
+            get_device_info=AsyncMock(return_value=DEVICE_INFO),
         )
         self.app.onvif = self.onvif
 
@@ -115,3 +124,35 @@ class TestHttpPtz(BaseTestHttp):
 
         assert response.status_code == 422
         self.onvif.set_preset.assert_not_awaited()
+
+    def test_device_info_returned_as_body(self):
+        for headers in ({}, VIEWER):
+            with self.subTest(headers=headers):
+                with AuthTestClient(self.app) as client:
+                    response = client.get(f"/{CAMERA}/onvif/info", headers=headers)
+
+                assert response.status_code == 200
+                assert response.json() == DEVICE_INFO
+
+        self.onvif.get_device_info.assert_awaited_with(CAMERA)
+
+    def test_device_info_errors_mapped_to_status_codes(self):
+        for error, status in (
+            (OnvifUnavailableError("ONVIF is not configured"), 404),
+            (CameraFault("Cannot connect to host"), 502),
+        ):
+            with self.subTest(error=error):
+                self.onvif.get_device_info.side_effect = error
+
+                with AuthTestClient(self.app) as client:
+                    response = client.get(f"/{CAMERA}/onvif/info")
+
+                assert response.status_code == status
+                assert str(error) in response.json()["message"]
+
+    def test_device_info_unknown_camera(self):
+        with AuthTestClient(self.app) as client:
+            response = client.get("/missing/onvif/info")
+
+        assert response.status_code in (403, 404)
+        self.onvif.get_device_info.assert_not_awaited()

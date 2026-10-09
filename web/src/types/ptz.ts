@@ -27,3 +27,24 @@ export type CameraPtzInfo = {
   max_presets?: number | null;
   profiles: OnvifProfile[];
 };
+
+/** What a camera's ONVIF device service reports; null means it did not answer. */
+export type OnvifDeviceInfo = {
+  manufacturer: string | null;
+  model: string | null;
+  firmware_version: string | null;
+  /** ONVIF conformance profiles (S, G, T, M, ...), not media profiles. */
+  conformance_profiles: string[] | null;
+  date_time: {
+    type: string | null;
+    timezone: string | null;
+    daylight_savings: boolean | null;
+    utc_time: string | null;
+    /** Camera clock minus Frigate's clock. */
+    offset_seconds: number | null;
+  } | null;
+  ntp: {
+    from_dhcp: boolean | null;
+    servers: string[];
+  } | null;
+};

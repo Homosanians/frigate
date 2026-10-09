@@ -25,6 +25,7 @@ import { LuExternalLink, LuInfo } from "react-icons/lu";
 import { Link } from "react-router-dom";
 
 import DebugDrawingLayer from "@/components/overlay/DebugDrawingLayer";
+import OnvifDebugInfo from "@/components/settings/OnvifDebugInfo";
 import { Separator } from "@/components/ui/separator";
 import { isDesktop } from "react-device-detect";
 import { Trans, useTranslation } from "react-i18next";
@@ -43,6 +44,13 @@ type ObjectSettingsViewProps = {
 type Options = { [key: string]: boolean };
 
 const emptyObject = Object.freeze({});
+
+// full class names so tailwind keeps them
+const TAB_GRID_COLUMNS: Record<number, string> = {
+  2: "grid-cols-2",
+  3: "grid-cols-3",
+  4: "grid-cols-4",
+};
 
 export default function ObjectSettingsView({
   selectedCamera,
@@ -163,6 +171,8 @@ export default function ObjectSettingsView({
     return <ActivityIndicator />;
   }
 
+  const showOnvif = !!cameraConfig.onvif?.host;
+
   return (
     <div className="mt-1 flex size-full flex-col pb-2 md:flex-row">
       <Toaster position="top-center" closeButton={true} />
@@ -203,9 +213,11 @@ export default function ObjectSettingsView({
           <TabsList
             className={cn(
               "grid w-full",
-              cameraConfig.audio.enabled_in_config
-                ? "grid-cols-3"
-                : "grid-cols-2",
+              TAB_GRID_COLUMNS[
+                2 +
+                  Number(cameraConfig.audio.enabled_in_config) +
+                  Number(showOnvif)
+              ],
             )}
           >
             <TabsTrigger value="debug">{t("debug.debugging")}</TabsTrigger>
@@ -214,6 +226,9 @@ export default function ObjectSettingsView({
             </TabsTrigger>
             {cameraConfig.audio.enabled_in_config && (
               <TabsTrigger value="audio">{t("debug.audio.title")}</TabsTrigger>
+            )}
+            {showOnvif && (
+              <TabsTrigger value="onvif">{t("debug.onvif.title")}</TabsTrigger>
             )}
           </TabsList>
           <TabsContent value="debug">
@@ -335,6 +350,11 @@ export default function ObjectSettingsView({
                 cameraConfig={cameraConfig}
                 audioDetections={memoizedAudio}
               />
+            </TabsContent>
+          )}
+          {showOnvif && (
+            <TabsContent value="onvif">
+              <OnvifDebugInfo cameraName={cameraConfig.name} />
             </TabsContent>
           )}
         </Tabs>

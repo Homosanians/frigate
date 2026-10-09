@@ -100,6 +100,7 @@ def _make_controller(autotracking_enabled: bool) -> OnvifController:
     controller.config = config
     controller.cams = {CAMERA: {"onvif": _make_onvif_camera(), "init": False}}
     controller.failed_cams = {}
+    controller.device_locks = {}
     controller.ptz_metrics = {CAMERA: MagicMock()}
     return controller
 
@@ -111,6 +112,7 @@ def _make_move_controller(autotracking_enabled: bool) -> OnvifController:
     controller = OnvifController.__new__(OnvifController)
     controller.config = config
     controller.failed_cams = {}
+    controller.device_locks = {}
 
     ptz = MagicMock()
     ptz.RelativeMove = AsyncMock()

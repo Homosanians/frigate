@@ -229,6 +229,12 @@ Admin users can manage the camera's ONVIF presets directly from the PTZ controls
 
 Presets are stored on the camera itself. ONVIF has no rename operation, so overwriting a preset (with or without a new name) always stores the camera's current position. If a preset is used as the autotracking `return_preset`, renaming or deleting it requires updating the config as well.
 
+### Viewing ONVIF device info
+
+For any camera with an ONVIF host configured, PTZ or not, the debug view in the Live view has an **ONVIF** tab showing what the camera reports about itself: manufacturer, model and firmware, the ONVIF conformance profiles it advertises (such as Profile S, G or T), its time source, timezone and NTP servers, and how far its clock is from Frigate's.
+
+Cameras declare their profiles themselves and some firmware leaves them out, so a missing profile does not prove the camera lacks support. The [ONVIF conformant products database](https://www.onvif.org/conformant-products/) is the authoritative source.
+
 ## ONVIF PTZ camera recommendations
 
 This list of working and non-working PTZ cameras is based on user feedback. If you'd like to report specific quirks or issues with a manufacturer or camera that would be helpful for other users, open a pull request to add to this list.

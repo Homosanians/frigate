@@ -202,14 +202,17 @@ async def camera_ptz_info(request: Request, camera_name: str):
         )
 
 
-async def _ptz_management_request(
+async def _onvif_request(
     request: Request,
     camera_name: str,
     method: Callable[..., Coroutine[Any, Any, Any]],
     *args: Any,
-    message: str,
+    message: str | None = None,
 ) -> JSONResponse:
-    """Run a PTZ management call on the OnvifController loop and map its errors."""
+    """Run an OnvifController call on its loop and map its errors.
+
+    Without a success message the call's result is returned as the response body.
+    """
     if camera_name not in request.app.frigate_config.cameras:
         return JSONResponse(
             content={"success": False, "message": "Camera not found"},
@@ -233,11 +236,14 @@ async def _ptz_management_request(
     except Exception as e:
         # zeep faults carry the camera's own explanation in .message
         error = getattr(e, "message", None) or str(e)
-        logger.error("PTZ request failed for %s: %s", camera_name, error)
+        logger.error("ONVIF request failed for %s: %s", camera_name, error)
         return JSONResponse(
             content={"success": False, "message": f"Camera rejected request: {error}"},
             status_code=502,
         )
+
+    if message is None:
+        return JSONResponse(content=result)
 
     content: dict[str, Any] = {"success": True, "message": message}
 
@@ -258,7 +264,7 @@ async def _ptz_management_request(
 async def camera_ptz_preset_create(
     request: Request, camera_name: str, body: PtzPresetCreateBody
 ):
-    return await _ptz_management_request(
+    return await _onvif_request(
         request,
         camera_name,
         request.app.onvif.set_preset,
@@ -278,7 +284,7 @@ async def camera_ptz_preset_create(
 async def camera_ptz_preset_update(
     request: Request, camera_name: str, token: str, body: PtzPresetUpdateBody
 ):
-    return await _ptz_management_request(
+    return await _onvif_request(
         request,
         camera_name,
         request.app.onvif.set_preset,
@@ -297,7 +303,7 @@ async def camera_ptz_preset_update(
     description="Delete an ONVIF preset from the camera.",
 )
 async def camera_ptz_preset_delete(request: Request, camera_name: str, token: str):
-    return await _ptz_management_request(
+    return await _onvif_request(
         request,
         camera_name,
         request.app.onvif.remove_preset,
@@ -315,12 +321,21 @@ async def camera_ptz_preset_delete(request: Request, camera_name: str, token: st
     description="Save the current camera position as the ONVIF home position.",
 )
 async def camera_ptz_home_set(request: Request, camera_name: str):
-    return await _ptz_management_request(
+    return await _onvif_request(
         request,
         camera_name,
         request.app.onvif.set_home,
         message="Home position saved",
     )
+
+
+@router.get(
+    "/{camera_name}/onvif/info",
+    dependencies=[Depends(require_camera_access)],
+    description="Get the device information, ONVIF conformance profiles, clock and NTP settings the camera reports over ONVIF.",
+)
+async def camera_onvif_info(request: Request, camera_name: str):
+    return await _onvif_request(request, camera_name, request.app.onvif.get_device_info)
 
 
 @router.get(

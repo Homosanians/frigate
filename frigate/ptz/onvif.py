@@ -1,6 +1,7 @@
 """Configure and control camera via onvif."""
 
 import asyncio
+import datetime
 import logging
 import threading
 import time
@@ -11,6 +12,7 @@ from typing import Any
 
 import numpy
 from onvif import ONVIFCamera, ONVIFService
+from zeep.exceptions import Fault
 
 from frigate.camera import PTZMetrics
 from frigate.config import FrigateConfig, ZoomingModeEnum
@@ -56,6 +58,90 @@ PAN_TILT_VELOCITY = {
     OnvifCommandEnum.move_down: (0, -0.5),
 }
 
+CONFORMANCE_SCOPE_PREFIX = "onvif://www.onvif.org/profile/"
+
+
+def parse_conformance_profiles(scopes: list[Any] | None) -> list[str]:
+    """Return the ONVIF conformance profiles (S, G, T, ...) a device advertises.
+
+    Profile S is advertised as Profile/Streaming and the others by their letter,
+    sometimes followed by a sub-path such as Profile/Q/Operational.
+    """
+    profiles = set()
+
+    for scope in scopes or []:
+        item = getattr(scope, "ScopeItem", None)
+
+        if not isinstance(item, str) or not item.lower().startswith(
+            CONFORMANCE_SCOPE_PREFIX
+        ):
+            continue
+
+        name = item[len(CONFORMANCE_SCOPE_PREFIX) :].split("/")[0]
+
+        if name.lower() == "streaming":
+            profiles.add("S")
+        elif name:
+            profiles.add(name.upper())
+
+    return sorted(profiles)
+
+
+def _camera_utc_time(system_date: Any) -> datetime.datetime | None:
+    """Read the UTC clock from a GetSystemDateAndTime response."""
+    utc = getattr(system_date, "UTCDateTime", None)
+
+    try:
+        return datetime.datetime(
+            utc.Date.Year,
+            utc.Date.Month,
+            utc.Date.Day,
+            utc.Time.Hour,
+            utc.Time.Minute,
+            utc.Time.Second,
+            tzinfo=datetime.UTC,
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _date_time_info(system_date: Any) -> dict[str, Any]:
+    camera_time = _camera_utc_time(system_date)
+    time_zone = getattr(system_date, "TimeZone", None)
+
+    return {
+        "type": getattr(system_date, "DateTimeType", None),
+        "timezone": getattr(time_zone, "TZ", None),
+        "daylight_savings": getattr(system_date, "DaylightSavings", None),
+        "utc_time": camera_time.isoformat().replace("+00:00", "Z")
+        if camera_time
+        else None,
+        # positive when the camera clock is ahead of Frigate's
+        "offset_seconds": round(
+            (camera_time - datetime.datetime.now(datetime.UTC)).total_seconds()
+        )
+        if camera_time
+        else None,
+    }
+
+
+def _ntp_info(ntp: Any) -> dict[str, Any]:
+    from_dhcp = getattr(ntp, "FromDHCP", None)
+    hosts = getattr(ntp, "NTPFromDHCP" if from_dhcp else "NTPManual", None) or []
+
+    return {
+        "from_dhcp": from_dhcp,
+        "servers": [
+            address
+            for host in hosts
+            if (
+                address := getattr(host, "DNSname", None)
+                or getattr(host, "IPv4Address", None)
+                or getattr(host, "IPv6Address", None)
+            )
+        ],
+    }
+
 
 class OnvifController:
     ptz_metrics: dict[str, PTZMetrics]
@@ -71,6 +157,9 @@ class OnvifController:
         self.ptz_metrics = ptz_metrics
 
         self.status_locks: dict[str, asyncio.Lock] = {}
+        # serializes device management requests, which share the session's
+        # service addresses and clock offset with PTZ initialization
+        self.device_locks: dict[str, asyncio.Lock] = {}
 
         # Create a dedicated event loop and run it in a separate thread
         self.loop = asyncio.new_event_loop()
@@ -143,6 +232,7 @@ class OnvifController:
         self.cams.pop(cam_name, None)
         self.failed_cams.pop(cam_name, None)
         self.status_locks.pop(cam_name, None)
+        self.device_locks.pop(cam_name, None)
 
     async def _reinit_camera(self, cam_name: str) -> None:
         """Re-initialize a camera after config change."""
@@ -210,7 +300,8 @@ class OnvifController:
         cam = self.cams[camera_name]
         onvif: ONVIFCamera = cam["onvif"]
         try:
-            await onvif.update_xaddrs()
+            async with self.device_locks.setdefault(camera_name, asyncio.Lock()):
+                await onvif.update_xaddrs()
         except Exception as e:
             logger.error(f"Onvif connection failed for {camera_name}: {e}")
             return False
@@ -1079,6 +1170,98 @@ class OnvifController:
             "last_attempt": time.time(),
         }
         return {}
+
+    async def _get_onvif_session(self, camera_name: str) -> dict:
+        """Return a camera's ONVIF session without initializing PTZ, so cameras
+        without PTZ can still be queried."""
+        camera_config = self.config.cameras.get(camera_name)
+
+        if camera_config is None or not camera_config.onvif.host:
+            raise OnvifUnavailableError(f"ONVIF is not configured for {camera_name}")
+
+        if camera_name not in self.cams and not await self._init_single_camera(
+            camera_name
+        ):
+            raise OnvifUnavailableError(f"ONVIF failed to initialize for {camera_name}")
+
+        return self.cams[camera_name]
+
+    async def _get_device_service(self, camera_name: str) -> ONVIFService:
+        """Create the device management service. Callers hold the device lock."""
+        onvif: ONVIFCamera = self.cams[camera_name]["onvif"]
+
+        # with ignore_time_mismatch the clock offset is measured while the
+        # service addresses are read, and requests sent before that are rejected
+        # by cameras whose clock is off
+        if onvif.adjust_time and onvif.dt_diff is None:
+            await onvif.update_xaddrs()
+
+        return await onvif.create_devicemgmt_service()
+
+    async def _get_system_date_and_time(self, device: ONVIFService) -> Any:
+        # the clock is readable without credentials per the ONVIF spec, which
+        # matters when a wrong clock is what makes authentication fail
+        try:
+            return await device.authless_GetSystemDateAndTime()
+        except Fault:
+            return await device.GetSystemDateAndTime()
+
+    async def get_device_info(self, camera_name: str) -> dict[str, Any]:
+        """Read what a camera's ONVIF device service reports about itself.
+
+        Each request is independent, so a camera that does not implement one of
+        them still reports the rest with that key set to None.
+        """
+        await self._get_onvif_session(camera_name)
+        info: dict[str, Any] = {
+            "manufacturer": None,
+            "model": None,
+            "firmware_version": None,
+            "conformance_profiles": None,
+            "date_time": None,
+            "ntp": None,
+        }
+        errors: list[Exception] = []
+
+        async with self.device_locks.setdefault(camera_name, asyncio.Lock()):
+            device = await self._get_device_service(camera_name)
+
+            try:
+                device_info = await device.GetDeviceInformation()
+                info["manufacturer"] = getattr(device_info, "Manufacturer", None)
+                info["model"] = getattr(device_info, "Model", None)
+                info["firmware_version"] = getattr(device_info, "FirmwareVersion", None)
+            except Exception as e:
+                errors.append(e)
+                logger.debug(f"Unable to get ONVIF device info for {camera_name}: {e}")
+
+            try:
+                info["conformance_profiles"] = parse_conformance_profiles(
+                    await device.GetScopes()
+                )
+            except Exception as e:
+                errors.append(e)
+                logger.debug(f"Unable to get ONVIF scopes for {camera_name}: {e}")
+
+            try:
+                info["date_time"] = _date_time_info(
+                    await self._get_system_date_and_time(device)
+                )
+            except Exception as e:
+                errors.append(e)
+                logger.debug(f"Unable to get ONVIF date/time for {camera_name}: {e}")
+
+            try:
+                info["ntp"] = _ntp_info(await device.GetNTP())
+            except Exception as e:
+                errors.append(e)
+                logger.debug(f"Unable to get ONVIF NTP info for {camera_name}: {e}")
+
+        # nothing answered, so report why instead of a page of empty values
+        if len(errors) == 4:
+            raise errors[0]
+
+        return info
 
     async def get_service_capabilities(self, camera_name: str) -> None:
         if camera_name not in self.cams.keys():

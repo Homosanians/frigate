@@ -6074,6 +6074,40 @@ paths:
       security:
         - frigateAdminAuth: []
       x-required-role: admin
+  /{camera_name}/onvif/info:
+    get:
+      tags:
+        - Media
+      summary: Camera Onvif Info
+      description: |-
+        **Access:** Authenticated user with access to the referenced camera.
+
+        Get the device information, ONVIF conformance profiles, clock and NTP settings the camera reports over ONVIF.
+      operationId: camera_onvif_info__camera_name__onvif_info_get
+      parameters:
+        - name: camera_name
+          in: path
+          required: true
+          schema:
+            anyOf:
+              - type: string
+              - type: 'null'
+            title: Camera Name
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+        - frigateUserAuth: []
+      x-required-role: camera
   /{camera_name}/latest.{extension}:
     get:
       tags:

@@ -1032,6 +1032,52 @@
       "score": "Score",
       "ratio": "Ratio",
       "area": "Area"
+    },
+    "onvif": {
+      "title": "ONVIF",
+      "desc": "What the camera reports about itself over ONVIF.",
+      "refresh": "Refresh ONVIF info",
+      "error": "Unable to read ONVIF info: {{message}}",
+      "unavailable": "Unavailable",
+      "yes": "Yes",
+      "no": "No",
+      "device": {
+        "title": "Device",
+        "manufacturer": "Manufacturer",
+        "model": "Model",
+        "firmware": "Firmware"
+      },
+      "profiles": {
+        "title": "ONVIF profiles",
+        "desc": "Conformance profiles the camera advertises. Cameras declare these themselves and some firmware omits them.",
+        "none": "Not advertised by the camera",
+        "profile": "Profile {{profile}}",
+        "names": {
+          "S": "Streaming",
+          "G": "Recording and storage",
+          "T": "Advanced video streaming",
+          "M": "Metadata and analytics",
+          "C": "Physical access control",
+          "A": "Access control configuration",
+          "D": "Access control peripherals",
+          "Q": "Quick installation"
+        }
+      },
+      "clock": {
+        "title": "Clock",
+        "source": "Time source",
+        "timezone": "Timezone",
+        "daylightSavings": "Daylight saving",
+        "cameraTime": "Camera time",
+        "offset": "Offset from Frigate",
+        "inSync": "In sync"
+      },
+      "ntp": {
+        "title": "NTP",
+        "fromDhcp": "From DHCP",
+        "servers": "Servers",
+        "noServers": "None"
+      }
     }
   },
   "imageSourceStream": {
