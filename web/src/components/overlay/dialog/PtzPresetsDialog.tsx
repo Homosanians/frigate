@@ -29,7 +29,7 @@ import { ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { TooltipPortal } from "@radix-ui/react-tooltip";
 import { LuPlus, LuSave, LuTrash2 } from "react-icons/lu";
-import { MdOutlineNearMe } from "react-icons/md";
+import { MdHome, MdOutlineNearMe } from "react-icons/md";
 import useSWR from "swr";
 
 // 1-64 characters once surrounding whitespace is trimmed, matching the API
@@ -41,6 +41,7 @@ type PtzPresetsDialogProps = {
   setOpen: (open: boolean) => void;
   presets: PtzPreset[];
   maxPresets?: number | null;
+  canSetHome: boolean;
   onGoto: (preset: PtzPreset) => void;
 };
 
@@ -50,11 +51,12 @@ export default function PtzPresetsDialog({
   setOpen,
   presets,
   maxPresets,
+  canSetHome,
   onGoto,
 }: PtzPresetsDialogProps) {
   const { t } = useTranslation(["views/live", "common"]);
   const { data: config } = useSWR<FrigateConfig>("config");
-  const { overwritePreset, deletePreset, isSaving } =
+  const { overwritePreset, deletePreset, setHome, isSaving } =
     usePtzPresetActions(camera);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -127,7 +129,7 @@ export default function PtzPresetsDialog({
             ))}
           </div>
 
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground">
               {maxPresets
                 ? t("ptz.presetManagement.count", {
@@ -136,14 +138,22 @@ export default function PtzPresetsDialog({
                   })
                 : null}
             </span>
-            <Button
-              variant="select"
-              disabled={isSaving}
-              onClick={() => setCreateOpen(true)}
-            >
-              <LuPlus className="mr-1" />
-              {t("ptz.presetManagement.create.label")}
-            </Button>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {canSetHome && (
+                <Button disabled={isSaving} onClick={() => setHome()}>
+                  <MdHome className="mr-1" />
+                  {t("ptz.home.set")}
+                </Button>
+              )}
+              <Button
+                variant="select"
+                disabled={isSaving}
+                onClick={() => setCreateOpen(true)}
+              >
+                <LuPlus className="mr-1" />
+                {t("ptz.presetManagement.create.label")}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

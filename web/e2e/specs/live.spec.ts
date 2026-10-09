@@ -300,6 +300,29 @@ test.describe("Live PTZ preset management @high", () => {
     return menu;
   }
 
+  async function openPresetManager(frigateApp: FrigateApp) {
+    const menu = await openPresetMenu(frigateApp);
+    await menu.getByRole("menuitem", { name: "Manage presets…" }).click();
+    const manager = frigateApp.page.getByRole("dialog", {
+      name: "PTZ presets",
+    });
+    await expect(manager).toBeVisible();
+    return manager;
+  }
+
+  // saving a new preset is reached through the preset manager
+  async function openCreateDialog(frigateApp: FrigateApp) {
+    const manager = await openPresetManager(frigateApp);
+    await manager
+      .getByRole("button", { name: "Save current position as preset…" })
+      .click();
+    const dialog = frigateApp.page.getByRole("dialog", {
+      name: "Save current position as preset",
+    });
+    await expect(dialog).toBeVisible();
+    return dialog;
+  }
+
   test("admin saves the current position as a new preset", async ({
     frigateApp,
   }) => {
@@ -315,13 +338,7 @@ test.describe("Live PTZ preset management @high", () => {
     });
 
     await frigateApp.goto(`/#${PTZ_CAMERA}`);
-    const menu = await openPresetMenu(frigateApp);
-    await menu
-      .getByRole("menuitem", { name: "Save current position as preset…" })
-      .click();
-
-    const dialog = frigateApp.page.getByRole("dialog");
-    await expect(dialog).toBeVisible();
+    const dialog = await openCreateDialog(frigateApp);
     await dialog.getByRole("textbox").fill("Porch");
     await dialog.getByRole("button", { name: "Save" }).click();
 
@@ -355,11 +372,7 @@ test.describe("Live PTZ preset management @high", () => {
     );
 
     await frigateApp.goto(`/#${PTZ_CAMERA}`);
-    const menu = await openPresetMenu(frigateApp);
-    await menu
-      .getByRole("menuitem", { name: "Save current position as preset…" })
-      .click();
-    const dialog = frigateApp.page.getByRole("dialog");
+    const dialog = await openCreateDialog(frigateApp);
     await dialog.getByRole("textbox").fill("Porch");
     await dialog.getByRole("button", { name: "Save" }).click();
 
@@ -381,11 +394,7 @@ test.describe("Live PTZ preset management @high", () => {
     });
 
     await frigateApp.goto(`/#${PTZ_CAMERA}`);
-    const menu = await openPresetMenu(frigateApp);
-    await menu
-      .getByRole("menuitem", { name: "Save current position as preset…" })
-      .click();
-    const dialog = frigateApp.page.getByRole("dialog");
+    const dialog = await openCreateDialog(frigateApp);
 
     for (const name of ["x".repeat(65), "   "]) {
       await dialog.getByRole("textbox").fill(name);
@@ -405,16 +414,17 @@ test.describe("Live PTZ preset management @high", () => {
     await installWsFrameCapture(frigateApp.page);
 
     await frigateApp.goto(`/#${PTZ_CAMERA}`);
-    const menu = await openPresetMenu(frigateApp);
-    await menu
-      .getByRole("menuitem", { name: "Save current position as preset…" })
-      .click();
-    const dialog = frigateApp.page.getByRole("dialog");
+    const dialog = await openCreateDialog(frigateApp);
     await dialog.getByRole("textbox").click();
     // "1" and "2" are the preset hotkeys for Driveway and Gate
     await frigateApp.page.keyboard.type("Cam 12");
     await frigateApp.page.keyboard.press("Escape");
     await expect(dialog).not.toBeVisible();
+    // the manager stays open underneath
+    await frigateApp.page.keyboard.press("Escape");
+    await expect(
+      frigateApp.page.getByRole("dialog", { name: "PTZ presets" }),
+    ).not.toBeVisible();
 
     // recall Gate from the menu; frames are sent in order, so any frame the
     // typing produced would already be captured once this one arrives
@@ -427,6 +437,21 @@ test.describe("Live PTZ preset management @high", () => {
       frame.includes("preset_"),
     );
     expect(presetFrames).toHaveLength(1);
+  });
+
+  test("the menu offers only the preset manager besides the presets", async ({
+    frigateApp,
+  }) => {
+    test.skip(frigateApp.isMobile, "PTZ preset dropdown is desktop-only");
+    await installPtz(frigateApp);
+
+    await frigateApp.goto(`/#${PTZ_CAMERA}`);
+    const menu = await openPresetMenu(frigateApp);
+    await expect(menu.getByRole("menuitem")).toHaveText([
+      "Driveway",
+      "Gate",
+      "Manage presets…",
+    ]);
   });
 
   test("manager overwrites with a new name and deletes by encoded token", async ({
@@ -450,11 +475,7 @@ test.describe("Live PTZ preset management @high", () => {
     );
 
     await frigateApp.goto(`/#${PTZ_CAMERA}`);
-    const menu = await openPresetMenu(frigateApp);
-    await menu.getByRole("menuitem", { name: "Manage presets…" }).click();
-    const manager = frigateApp.page.getByRole("dialog", {
-      name: "PTZ presets",
-    });
+    const manager = await openPresetManager(frigateApp);
     await expect(manager.getByText("2 of 8 presets")).toBeVisible();
 
     // overwrite Driveway (the autotracking return preset) under a new name
@@ -511,9 +532,9 @@ test.describe("Live PTZ preset management @high", () => {
         frame.includes(`"${PTZ_CAMERA}/ptz"`) && frame.includes('"HOME"'),
     );
 
-    const menu = await openPresetMenu(frigateApp);
-    await menu
-      .getByRole("menuitem", { name: "Set current position as home" })
+    const manager = await openPresetManager(frigateApp);
+    await manager
+      .getByRole("button", { name: "Set current position as home" })
       .click();
     await expect.poll(() => setHomeCalls).toBe(1);
     await expect(
@@ -526,12 +547,12 @@ test.describe("Live PTZ preset management @high", () => {
     await installPtz(frigateApp, { features: ["pt", "zoom", "home"] });
 
     await frigateApp.goto(`/#${PTZ_CAMERA}`);
-    const menu = await openPresetMenu(frigateApp);
+    const manager = await openPresetManager(frigateApp);
     await expect(
-      menu.getByRole("menuitem", { name: "Manage presets…" }),
+      manager.getByRole("button", { name: "Save current position as preset…" }),
     ).toBeVisible();
     await expect(
-      menu.getByRole("menuitem", { name: "Set current position as home" }),
+      manager.getByRole("button", { name: "Set current position as home" }),
     ).toHaveCount(0);
   });
 
@@ -546,9 +567,6 @@ test.describe("Live PTZ preset management @high", () => {
     await expect(menu.getByRole("menuitem", { name: "Gate" })).toBeVisible();
     await expect(
       menu.getByRole("menuitem", { name: "Manage presets…" }),
-    ).toHaveCount(0);
-    await expect(
-      menu.getByRole("menuitem", { name: "Save current position as preset…" }),
     ).toHaveCount(0);
   });
 });

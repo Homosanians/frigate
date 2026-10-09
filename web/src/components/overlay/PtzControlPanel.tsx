@@ -1,8 +1,6 @@
 import { usePtzCommand } from "@/api/ws";
 import { Button } from "@/components/ui/button";
-import PtzPresetsDialog, {
-  PtzPresetCreateDialog,
-} from "@/components/overlay/dialog/PtzPresetsDialog";
+import PtzPresetsDialog from "@/components/overlay/dialog/PtzPresetsDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,7 +15,6 @@ import {
 } from "@/components/ui/tooltip";
 import useKeyboardListener from "@/hooks/use-keyboard-listener";
 import { useIsAdmin } from "@/hooks/use-is-admin";
-import { usePtzPresetActions } from "@/hooks/use-ptz-presets";
 import { CameraPtzInfo, PtzPreset } from "@/types/ptz";
 import React, { useCallback, useMemo, useState } from "react";
 import { isMobile } from "react-device-detect";
@@ -63,8 +60,6 @@ export default function PtzControlPanel({
   const { send: sendPtz } = usePtzCommand(camera);
 
   const isAdmin = useIsAdmin();
-  const { setHome } = usePtzPresetActions(camera);
-  const [createPresetOpen, setCreatePresetOpen] = useState(false);
   const [managePresetsOpen, setManagePresetsOpen] = useState(false);
 
   // preset_details keeps the camera's original casing; older backends only
@@ -365,20 +360,6 @@ export default function PtzControlPanel({
                 {presets.length > 0 && <DropdownMenuSeparator />}
                 <DropdownMenuItem
                   className="cursor-pointer"
-                  onSelect={() => setCreatePresetOpen(true)}
-                >
-                  {t("ptz.presetManagement.create.label")}
-                </DropdownMenuItem>
-                {ptz?.features?.includes("home-set") && (
-                  <DropdownMenuItem
-                    className="cursor-pointer"
-                    onSelect={() => setHome()}
-                  >
-                    {t("ptz.home.set")}
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem
-                  className="cursor-pointer"
                   onSelect={() => setManagePresetsOpen(true)}
                 >
                   {t("ptz.presetManagement.manage")}
@@ -389,21 +370,15 @@ export default function PtzControlPanel({
         </DropdownMenu>
       )}
       {canManagePresets && (
-        <>
-          <PtzPresetCreateDialog
-            camera={camera}
-            open={createPresetOpen}
-            setOpen={setCreatePresetOpen}
-          />
-          <PtzPresetsDialog
-            camera={camera}
-            open={managePresetsOpen}
-            setOpen={setManagePresetsOpen}
-            presets={presets}
-            maxPresets={ptz?.max_presets}
-            onGoto={(preset) => sendPtz(`preset_${preset.name}`)}
-          />
-        </>
+        <PtzPresetsDialog
+          camera={camera}
+          open={managePresetsOpen}
+          setOpen={setManagePresetsOpen}
+          presets={presets}
+          maxPresets={ptz?.max_presets}
+          canSetHome={ptz?.features?.includes("home-set") ?? false}
+          onGoto={(preset) => sendPtz(`preset_${preset.name}`)}
+        />
       )}
     </div>
   );
