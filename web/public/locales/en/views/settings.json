@@ -1048,6 +1048,9 @@
       "pause": "Pause",
       "resume": "Resume",
       "clear": "Clear",
+      "copy": "Copy",
+      "copySuccess": "PTZ log copied to clipboard",
+      "copyError": "Could not copy the PTZ log",
       "empty": "No PTZ activity yet",
       "missed": "Some entries were skipped",
       "restart": "Frigate restarted",
@@ -1058,7 +1061,8 @@
         "noMoveStatus": "No move status",
         "timeout": "The camera did not answer the status request",
         "failed": "Status request failed: {{error}}",
-        "read": "read at {{time}}"
+        "read": "read at {{time}}",
+        "summary": "{{status}}, {{position}}, {{read}}"
       },
       "source": {
         "command": "command",

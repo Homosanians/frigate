@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { FaEraser, FaPause, FaPlay } from "react-icons/fa";
+import copy from "copy-to-clipboard";
+import { toast } from "sonner";
+import { FaCopy, FaEraser, FaPause, FaPlay } from "react-icons/fa";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { usePtzDebugLog } from "@/hooks/use-ptz-debug-log";
 import { PtzDebugResponse, PtzPosition, PtzStatus } from "@/types/ptz";
 import PtzDebugRow from "./PtzDebugRow";
+import { ptzLogText } from "./ptzDebugCopy";
 import { formatPtzNumber, formatPtzTime } from "./ptzDebugFormat";
+import { summarizePtzSpaces } from "./ptzDebugSummary";
 
 function StatusLine({ status }: { status: PtzStatus | null }) {
   const { t } = useTranslation(["views/settings"]);
@@ -94,19 +98,7 @@ function PtzDebugHeader({
       <StatusLine status={response.status} />
       {spaces.length > 0 && (
         <div className="text-muted-foreground">
-          {t("debug.ptz.spaces", {
-            spaces: spaces
-              .map((s) =>
-                t("debug.ptz.space", {
-                  space: s.space,
-                  xMin: formatPtzNumber(s.x[0], 2),
-                  xMax: formatPtzNumber(s.x[1], 2),
-                  yMin: formatPtzNumber(s.y[0], 2),
-                  yMax: formatPtzNumber(s.y[1], 2),
-                }),
-              )
-              .join(", "),
-          })}
+          {summarizePtzSpaces(spaces, t)}
         </div>
       )}
       {defaultSpace && (
@@ -184,6 +176,14 @@ export default function PtzDebugLog({ camera, active }: PtzDebugLogProps) {
 
   const entryCount = rows.filter((row) => row.kind !== "marker").length;
 
+  const handleCopy = useCallback(async () => {
+    if (await copy(ptzLogText(camera, response, rows, previousPositions, t))) {
+      toast.success(t("debug.ptz.copySuccess"));
+    } else {
+      toast.error(t("debug.ptz.copyError"));
+    }
+  }, [camera, response, rows, previousPositions, t]);
+
   return (
     <div className="flex w-full flex-col gap-3">
       <p className="text-xs text-muted-foreground">{t("debug.ptz.desc")}</p>
@@ -216,6 +216,17 @@ export default function PtzDebugLog({ camera, active }: PtzDebugLogProps) {
           >
             <FaEraser className="size-2.5" />
             {t("debug.ptz.clear")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
+            onClick={handleCopy}
+            disabled={!response && rows.length === 0}
+            aria-label={t("debug.ptz.copy")}
+          >
+            <FaCopy className="size-2.5" />
+            {t("debug.ptz.copy")}
           </Button>
         </div>
       </div>

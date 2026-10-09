@@ -10,6 +10,10 @@
 
 import { test, expect } from "../../fixtures/frigate-test";
 import { viewerProfile } from "../../fixtures/mock-data/profile";
+import {
+  grantClipboardPermissions,
+  readClipboard,
+} from "../../helpers/clipboard";
 import type { Page } from "@playwright/test";
 
 const DEBUG_URL = "/?debug=true#front_door";
@@ -156,6 +160,32 @@ test.describe("PTZ debug log @medium @mobile", () => {
       .poll(() => afters.length, { timeout: 5_000 })
       .toBeGreaterThan(1);
     expect(afters.slice(1)).toContain("3");
+  });
+
+  test("Copy puts the status and every row on the clipboard", async ({
+    frigateApp,
+  }) => {
+    await grantClipboardPermissions(frigateApp.page.context());
+    await frigateApp.installDefaults({
+      config: { cameras: { front_door: { onvif: { host: "10.0.0.5" } } } },
+    });
+    await mockPtzDebug(frigateApp.page);
+    await frigateApp.goto(DEBUG_URL);
+
+    await frigateApp.page.getByRole("tab", { name: "PTZ" }).click();
+    await expect(frigateApp.page.getByTestId("ptz-debug-row")).toHaveCount(3);
+
+    await frigateApp.page.getByRole("button", { name: "Copy" }).click();
+
+    await expect
+      .poll(() => readClipboard(frigateApp.page))
+      .toContain("front_door");
+    const text = await readClipboard(frigateApp.page);
+    expect(text).toContain("pan -0.201, tilt 1.000");
+    // the summary line, then the full entry for pasting into an issue
+    expect(text).toContain("RelativeMove in fov space");
+    expect(text).toContain('"operation":"RelativeMove"');
+    expect(text).toContain("repeated 3 times");
   });
 
   test("no PTZ tab for a viewer, who cannot read the log", async ({

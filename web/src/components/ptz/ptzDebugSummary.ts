@@ -1,6 +1,12 @@
 import type { TFunction } from "i18next";
-import { PtzDebugEntryRow, PtzDebugRowItem, PtzPosition } from "@/types/ptz";
-import { formatPtzNumber as n } from "./ptzDebugFormat";
+import {
+  PtzDebugEntryRow,
+  PtzDebugRowItem,
+  PtzPosition,
+  PtzRelativeSpace,
+  PtzStatus,
+} from "@/types/ptz";
+import { formatPtzNumber as n, formatPtzTime } from "./ptzDebugFormat";
 
 // helpers that get t from a component name the namespace in every call, so
 // the i18n extractor files the keys under views/settings
@@ -319,4 +325,64 @@ export function summarizePtzRow(
   }
 
   return text;
+}
+
+// The relative move spaces a camera offers, with their ranges
+export function summarizePtzSpaces(
+  spaces: PtzRelativeSpace[],
+  t: TFunction,
+): string {
+  return t("debug.ptz.spaces", {
+    ns: "views/settings",
+    spaces: spaces
+      .map((space) =>
+        t("debug.ptz.space", {
+          ns: "views/settings",
+          space: space.space,
+          xMin: n(space.x[0], 2),
+          xMax: n(space.x[1], 2),
+          yMin: n(space.y[0], 2),
+          yMax: n(space.y[1], 2),
+        }),
+      )
+      .join(", "),
+  });
+}
+
+// The camera's last status read as one line
+export function summarizePtzStatus(
+  status: PtzStatus | null,
+  t: TFunction,
+): string {
+  if (!status) {
+    return t("debug.ptz.status.unknown", { ns: "views/settings" });
+  }
+
+  if (status.error) {
+    return status.error === "timeout"
+      ? t("debug.ptz.status.timeout", { ns: "views/settings" })
+      : t("debug.ptz.status.failed", {
+          ns: "views/settings",
+          error: status.error,
+        });
+  }
+
+  return t("debug.ptz.status.summary", {
+    ns: "views/settings",
+    status:
+      status.pan_tilt ??
+      t("debug.ptz.status.noMoveStatus", { ns: "views/settings" }),
+    position: status.position
+      ? t("debug.ptz.status.position", {
+          ns: "views/settings",
+          pan: n(status.position.pan),
+          tilt: n(status.position.tilt),
+          zoom: n(status.position.zoom),
+        })
+      : t("debug.ptz.status.noPosition", { ns: "views/settings" }),
+    read: t("debug.ptz.status.read", {
+      ns: "views/settings",
+      time: formatPtzTime(status.time),
+    }),
+  });
 }
