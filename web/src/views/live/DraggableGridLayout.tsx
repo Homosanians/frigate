@@ -206,6 +206,7 @@ export default function DraggableGridLayout({
     "contain",
   );
   const videoFit = videoFitSetting ?? "contain";
+  const [noVideoWarning] = useUserPersistence("noVideoWarning", 0);
 
   const { allGroupsStreamingSettings, setAllGroupsStreamingSettings } =
     useStreamingSettings();
@@ -835,6 +836,7 @@ export default function DraggableGridLayout({
                     alwaysShowCameraName={displayCameraNames}
                     seamless={seamlessTiles}
                     videoFit={videoFit}
+                    noVideoWarning={noVideoWarning}
                     useWebGL={useWebGL}
                     cameraRef={cameraRef}
                     className={cn(

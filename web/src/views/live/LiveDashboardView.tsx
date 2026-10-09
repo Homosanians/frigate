@@ -232,6 +232,7 @@ export default function LiveDashboardView({
     "liveVideoFit",
     "contain",
   );
+  const [noVideoWarning] = useUserPersistence("noVideoWarning", 0);
 
   const { allGroupsStreamingSettings, setAllGroupsStreamingSettings } =
     useStreamingSettings();
@@ -639,6 +640,7 @@ export default function LiveDashboardView({
                         alwaysShowCameraName={displayCameraNames}
                         seamless={seamlessTiles}
                         videoFit={videoFit}
+                        noVideoWarning={noVideoWarning}
                         useWebGL={useWebGL}
                         playInBackground={false}
                         showStats={statsStates[camera.name]}

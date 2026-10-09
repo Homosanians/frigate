@@ -4,6 +4,7 @@ import {
   useFrigateEvents,
   useInitialCameraState,
   useMotionActivity,
+  useVideoLoss,
 } from "@/api/ws";
 import { CameraConfig, FrigateConfig } from "@/types/frigateConfig";
 import { MotionData, ReviewSegment } from "@/types/review";
@@ -29,6 +30,8 @@ type useCameraActivityReturn = {
   objects: ObjectType[];
   audio_detections: AudioDetection[];
   offline: boolean;
+  // when Frigate stopped receiving the camera's frames, in ms
+  videoLossSince?: number;
 };
 
 export function isCameraOffline(
@@ -177,6 +180,30 @@ export function useCameraActivity(
     });
   }, [attributeLabels, camera, updatedEvent]);
 
+  // determine when the camera stopped sending frames. The topic changes as it
+  // happens; the snapshot dates a loss that began before this client connected.
+  // Whichever arrived last wins.
+
+  const { payload: videoLoss } = useVideoLoss(camera?.name ?? "");
+  const retryMs = (camera?.ffmpeg.retry_interval ?? 10) * 1000;
+  const [videoLossSince, setVideoLossSince] = useState<number>();
+
+  useEffect(() => {
+    if (videoLoss === "ON") {
+      // the topic turns on once no frame has arrived for retry_interval
+      setVideoLossSince(Date.now() - retryMs);
+    } else if (videoLoss === "OFF") {
+      setVideoLossSince(undefined);
+    }
+  }, [videoLoss, retryMs]);
+
+  useEffect(() => {
+    const seconds = updatedCameraState?.video_loss_seconds;
+    setVideoLossSince(
+      seconds === undefined ? undefined : Date.now() - seconds * 1000,
+    );
+  }, [updatedCameraState]);
+
   // determine if camera is offline
 
   const stats = useAutoFrigateStats();
@@ -198,6 +225,7 @@ export function useCameraActivity(
       : false,
     objects: isCameraEnabled ? (objects ?? []) : [],
     audio_detections: isCameraEnabled ? (audioDetections ?? []) : [],
+    videoLossSince: isCameraEnabled ? videoLossSince : undefined,
     offline,
   };
 }

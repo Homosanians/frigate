@@ -67,6 +67,12 @@ export const TRANSFER_KEYS: TransferKey[] = [
     schema: z.enum(["contain", "fill", "cover"]),
   },
   {
+    key: "noVideoWarning",
+    section: "preferences",
+    namespaced: true,
+    schema: z.number().int().min(0).max(600),
+  },
+  {
     key: "naturalAspectLayout",
     section: "preferences",
     namespaced: true,

@@ -1,5 +1,6 @@
 import { baseUrl } from "@/api/baseUrl";
 import { useUserPersistence } from "@/hooks/use-user-persistence";
+import { useVideoFrames } from "@/hooks/use-video-frames";
 import {
   LiveHealthSample,
   LivePlayerError,
@@ -29,6 +30,7 @@ type MSEPlayerProps = {
   onPlaying?: () => void;
   // go2rtc has attached the player, so it gets the stream's next keyframe
   onAttached?: () => void;
+  onFrame?: () => void;
   setFullResolution?: React.Dispatch<SetStateAction<VideoResolutionType>>;
   onError?: (error: LivePlayerError) => void;
   onHealthSample?: (sample: LiveHealthSample) => void;
@@ -46,6 +48,7 @@ function MSEPlayer({
   setStats,
   onPlaying,
   onAttached,
+  onFrame,
   setFullResolution,
   onError,
   onHealthSample,
@@ -85,6 +88,7 @@ function MSEPlayer({
   );
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  useVideoFrames(videoRef, onFrame);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTIDRef = useRef<number | null>(null);
   const intentionalDisconnectRef = useRef<boolean>(false);

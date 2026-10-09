@@ -710,6 +710,13 @@ export function useMotionActivity(camera: string): { payload: string } {
   return { payload: payload as string };
 }
 
+export function useVideoLoss(camera: string): { payload: string } {
+  const {
+    value: { payload },
+  } = useWs(`${camera}/video_loss`, "");
+  return { payload: payload as string };
+}
+
 export function useAudioActivity(camera: string): { payload: number } {
   const {
     value: { payload },

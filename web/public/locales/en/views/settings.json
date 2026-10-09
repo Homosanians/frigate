@@ -181,6 +181,11 @@
         "fill": "Stretch",
         "cover": "Crop"
       },
+      "noVideoWarning": {
+        "label": "No Video Warning",
+        "desc": "Show how long a camera's tile on the live dashboard has gone without a new picture, once it passes this many seconds. It covers a camera that stops sending frames to Frigate and a live stream that stalls in this browser.",
+        "off": "Off"
+      },
       "naturalAspectLayout": {
         "label": "Use Natural Aspect Ratios",
         "desc": "On camera group live view dashboards, size each tile to its camera's own natural aspect ratio. When disabled, cameras are snapped to a standard wide, landscape, or tall tile shape.",

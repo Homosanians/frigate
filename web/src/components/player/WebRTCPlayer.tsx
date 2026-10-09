@@ -7,6 +7,7 @@ import {
   VideoResolutionType,
 } from "@/types/live";
 import { FrigateConfig } from "@/types/frigateConfig";
+import { useVideoFrames } from "@/hooks/use-video-frames";
 import { webRTCIceServers } from "@/utils/webrtcUtil";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
@@ -26,6 +27,7 @@ type WebRtcPlayerProps = {
   onPlaying?: () => void;
   // the connection is up, so the player gets the stream's next keyframe
   onAttached?: () => void;
+  onFrame?: () => void;
   onError?: (error: LivePlayerError) => void;
   onHealthSample?: (sample: LiveHealthSample) => void;
   onMicrophoneError?: (error: TwoWayTalkError) => void;
@@ -45,6 +47,7 @@ export default function WebRtcPlayer({
   setFullResolution,
   onPlaying,
   onAttached,
+  onFrame,
   onError,
   onHealthSample,
   onMicrophoneError,
@@ -84,6 +87,7 @@ export default function WebRtcPlayer({
   const pcRef = useRef<RTCPeerConnection | undefined>(undefined);
   const wsRef = useRef<WebSocket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  useVideoFrames(videoRef, onFrame);
   // Separate sendonly-audio connection for two-way talk: go2rtc only wires the
   // backchannel from a connection's initial offer.
   const micPcRef = useRef<RTCPeerConnection | undefined>(undefined);

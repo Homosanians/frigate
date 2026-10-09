@@ -33,6 +33,7 @@ import { ImageShadowOverlay } from "../overlay/ImageShadowOverlay";
 import { getTranslatedLabel } from "@/utils/i18n";
 import { formatList } from "@/utils/stringUtil";
 import { VIDEO_FIT_CLASS } from "@/utils/videoUtil";
+import { NoVideoBadge } from "./NoVideoBadge";
 
 type LivePlayerProps = {
   cameraRef?: (ref: HTMLDivElement | null) => void;
@@ -45,6 +46,8 @@ type LivePlayerProps = {
   alwaysShowCameraName?: boolean;
   seamless?: boolean;
   videoFit?: LiveVideoFit;
+  // seconds without a new picture before the tile says so; 0 turns it off
+  noVideoWarning?: number;
   useWebGL: boolean;
   windowVisible?: boolean;
   playAudio?: boolean;
@@ -76,6 +79,7 @@ export default function LivePlayer({
   alwaysShowCameraName = false,
   seamless = false,
   videoFit = "contain",
+  noVideoWarning = 0,
   useWebGL = false,
   windowVisible = true,
   playAudio = false,
@@ -137,6 +141,7 @@ export default function LivePlayer({
     activeTracking,
     objects,
     offline,
+    videoLossSince,
   } = useCameraActivity(cameraConfig);
 
   const cameraActive = useMemo(
@@ -280,6 +285,14 @@ export default function LivePlayer({
     }
   }, [cameraConfig.name, cameraConfig.onvif.host]);
 
+  // no-video watchdog: frames land in a ref so they never re-render the tile
+
+  const lastFrameRef = useRef(0);
+  const handleFrame = useCallback(() => {
+    lastFrameRef.current = Date.now();
+  }, []);
+  const onFrame = noVideoWarning > 0 ? handleFrame : undefined;
+
   // enabled states
 
   const [isReEnabling, setIsReEnabling] = useState(false);
@@ -335,6 +348,7 @@ export default function LivePlayer({
         iOSCompatFullScreen={iOSCompatFullScreen}
         onPlaying={playerIsPlaying}
         onAttached={requestKeyframe}
+        onFrame={onFrame}
         pip={pip}
         onError={onError}
         onHealthSample={onHealthSample}
@@ -360,6 +374,7 @@ export default function LivePlayer({
           setStats={setStats}
           onPlaying={playerIsPlaying}
           onAttached={requestKeyframe}
+          onFrame={onFrame}
           pip={pip}
           setFullResolution={handleFullResolution}
           onError={onError}
@@ -391,6 +406,7 @@ export default function LivePlayer({
           setStats={setStats}
           containerRef={containerRef ?? internalContainerRef}
           onPlaying={playerIsPlaying}
+          onFrame={onFrame}
         />
       );
     } else {
@@ -621,6 +637,15 @@ export default function LivePlayer({
             <MdCircle className="mr-2 size-2 animate-pulse text-danger shadow-danger drop-shadow-md" />
           )}
       </div>
+      {noVideoWarning > 0 && cameraEnabled && (
+        <NoVideoBadge
+          timeout={noVideoWarning}
+          videoLossSince={videoLossSince}
+          expectLive={autoLive && !!streamName && cameraActive && windowVisible}
+          lastFrameRef={lastFrameRef}
+          compact={isCompact}
+        />
+      )}
       {showStats && (
         <PlayerStats
           stats={stats}

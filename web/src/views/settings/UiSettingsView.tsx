@@ -63,6 +63,8 @@ import {
 
 const WEEK_STARTS_ON = ["Sunday", "Monday"];
 const VIDEO_FITS: LiveVideoFit[] = ["contain", "fill", "cover"];
+// seconds; 0 turns the warning off
+const NO_VIDEO_WARNINGS = [0, 5, 10, 20, 30, 60];
 const IMPORT_FAILED_FLAG = "frigate-ui-settings-import-failed";
 
 type ConfirmTarget = "layouts" | "streaming" | "naturalAspect";
@@ -345,6 +347,10 @@ export default function UiSettingsView() {
     "liveVideoFit",
     "contain",
   );
+  const [noVideoWarning, setNoVideoWarning] = useUserPersistence(
+    "noVideoWarning",
+    0,
+  );
   const [naturalAspect, setNaturalAspect] = useUserPersistence(
     "naturalAspectLayout",
     false,
@@ -368,6 +374,11 @@ export default function UiSettingsView() {
     fill: t("general.liveDashboard.videoFit.fill"),
     cover: t("general.liveDashboard.videoFit.cover"),
   };
+
+  const noVideoWarningLabel = (seconds: number) =>
+    seconds > 0
+      ? t("time.second", { ns: "common", time: seconds, count: seconds })
+      : t("general.liveDashboard.noVideoWarning.off");
 
   const confirmCopy = useCallback(
     (target: ConfirmTarget) => {
@@ -507,6 +518,40 @@ export default function UiSettingsView() {
                             value={fit}
                           >
                             {videoFitLabels[fit]}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                }
+              />
+
+              <ValueSettingRow
+                id="no-video-warning"
+                label={t("general.liveDashboard.noVideoWarning.label")}
+                description={t("general.liveDashboard.noVideoWarning.desc")}
+                control={
+                  <Select
+                    value={(noVideoWarning ?? 0).toString()}
+                    onValueChange={(value) =>
+                      setNoVideoWarning(parseInt(value, 10))
+                    }
+                  >
+                    <SelectTrigger
+                      id="no-video-warning"
+                      className="w-full md:w-36"
+                    >
+                      {noVideoWarningLabel(noVideoWarning ?? 0)}
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {NO_VIDEO_WARNINGS.map((seconds) => (
+                          <SelectItem
+                            key={seconds}
+                            className="cursor-pointer"
+                            value={seconds.toString()}
+                          >
+                            {noVideoWarningLabel(seconds)}
                           </SelectItem>
                         ))}
                       </SelectGroup>

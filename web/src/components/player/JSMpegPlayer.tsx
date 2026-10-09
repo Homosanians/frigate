@@ -19,6 +19,7 @@ type JSMpegPlayerProps = {
   fit?: LiveVideoFit;
   setStats?: (stats: PlayerStatsType) => void;
   onPlaying?: () => void;
+  onFrame?: () => void;
 };
 
 export default function JSMpegPlayer({
@@ -33,12 +34,14 @@ export default function JSMpegPlayer({
   fit = "contain",
   setStats,
   onPlaying,
+  onFrame,
 }: JSMpegPlayerProps) {
   const url = `${baseUrl.replace(/^http/, "ws")}live/jsmpeg/${camera}`;
   const videoRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const internalContainerRef = useRef<HTMLDivElement | null>(null);
   const onPlayingRef = useRef(onPlaying);
+  const onFrameRef = useRef(onFrame);
   const [showCanvas, setShowCanvas] = useState(false);
   const [hasData, setHasData] = useState(false);
   const hasDataRef = useRef(hasData);
@@ -116,6 +119,10 @@ export default function JSMpegPlayer({
   }, [onPlaying]);
 
   useEffect(() => {
+    onFrameRef.current = onFrame;
+  }, [onFrame]);
+
+  useEffect(() => {
     if (!selectedContainerRef?.current || !url) {
       return;
     }
@@ -149,6 +156,7 @@ export default function JSMpegPlayer({
                 onPlayingRef.current?.();
               }
               frameCount++;
+              onFrameRef.current?.();
             },
           },
         );

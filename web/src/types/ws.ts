@@ -76,6 +76,8 @@ export interface FrigateCameraState {
   motion: boolean;
   objects: ObjectType[];
   audio_detections: AudioDetection[];
+  // seconds since the last frame, while Frigate is receiving none
+  video_loss_seconds?: number;
 }
 export interface FrigateAudioDetections {
   [camera: string]: AudioDetection[];

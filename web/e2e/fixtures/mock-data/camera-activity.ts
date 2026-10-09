@@ -36,6 +36,7 @@ export interface CameraActivityState {
     label: string;
     score: number;
   }>;
+  video_loss_seconds?: number;
 }
 
 function defaultCameraActivity(): CameraActivityState {
