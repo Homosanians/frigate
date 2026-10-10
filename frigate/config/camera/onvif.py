@@ -2,7 +2,7 @@ import ipaddress
 import re
 from enum import Enum
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from frigate.util.time import posix_timezone
 
@@ -15,6 +15,8 @@ __all__ = [
     "OnvifConfig",
     "OnvifTimeSyncConfig",
     "PtzAutotrackConfig",
+    "RelativeMoveConfig",
+    "RelativeMoveModeEnum",
     "ZoomingModeEnum",
 ]
 
@@ -28,6 +30,11 @@ class ZoomingModeEnum(str, Enum):
     disabled = "disabled"
     absolute = "absolute"
     relative = "relative"
+
+
+class RelativeMoveModeEnum(str, Enum):
+    fov = "fov"
+    generic = "generic"
 
 
 class PtzAutotrackConfig(FrigateBaseModel):
@@ -166,6 +173,45 @@ class OnvifTimeSyncConfig(FrigateBaseModel):
         return v
 
 
+class RelativeMoveConfig(FrigateBaseModel):
+    mode: RelativeMoveModeEnum = Field(
+        default=RelativeMoveModeEnum.fov,
+        title="Relative move mode",
+        description="How click to move and autotracking turn the camera: fov moves by fractions of the camera's field of view, generic moves by the camera's own units scaled by the pan and tilt scales. Use generic for cameras that carry out field of view moves wrongly.",
+    )
+    pan_scale: float | None = Field(
+        default=None,
+        title="Pan scale",
+        description="Generic pan units that move the view by half the frame width. Negative if the camera turns the other way. Required in generic mode.",
+        ge=-2.0,
+        le=2.0,
+    )
+    tilt_scale: float | None = Field(
+        default=None,
+        title="Tilt scale",
+        description="Generic tilt units that move the view by half the frame height. Negative if the camera tilts the other way. Required in generic mode.",
+        ge=-2.0,
+        le=2.0,
+    )
+
+    @field_validator("pan_scale", "tilt_scale")
+    @classmethod
+    def validate_scale(cls, v: float | None) -> float | None:
+        if v == 0:
+            raise ValueError("must not be 0")
+
+        return v
+
+    @model_validator(mode="after")
+    def validate_generic_scales(self) -> "RelativeMoveConfig":
+        if self.mode == RelativeMoveModeEnum.generic and (
+            self.pan_scale is None or self.tilt_scale is None
+        ):
+            raise ValueError("generic relative moves need pan_scale and tilt_scale")
+
+        return self
+
+
 class OnvifConfig(FrigateBaseModel):
     host: EnvString = Field(
         default="",
@@ -201,6 +247,11 @@ class OnvifConfig(FrigateBaseModel):
         default_factory=PtzAutotrackConfig,
         title="Autotracking",
         description="Automatically track moving objects and keep them centered in the frame using PTZ camera movements.",
+    )
+    relative_move: RelativeMoveConfig = Field(
+        default_factory=RelativeMoveConfig,
+        title="Relative moves",
+        description="How click to move and autotracking turn the camera.",
     )
     ignore_time_mismatch: bool = Field(
         default=False,

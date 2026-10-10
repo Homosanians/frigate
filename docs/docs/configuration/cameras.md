@@ -223,6 +223,49 @@ If your camera has multiple ONVIF profiles, you can specify which one to use for
 
 An ONVIF-capable camera that supports relative movement within the field of view (FOV) can also be configured to automatically track moving objects and keep them in the center of the frame. For autotracking setup, see the [autotracking](autotracking.md) docs.
 
+### Relative move mode
+
+Click to move and autotracking turn the camera with ONVIF relative moves in the field of view space, where moving by 1 means half the frame. Some cameras carry these moves out wrongly: they turn too far, in steps, or the wrong way. The PTZ tab of the camera's debug view shows it: after a click to move, the position the camera reports does not match the requested move.
+
+For such cameras, Frigate can send the moves in the camera's generic space instead, scaled for each axis:
+
+<ConfigTabs>
+<TabItem value="ui">
+
+Navigate to <NavPath path="Settings > Camera configuration > ONVIF" />, select the camera and expand the advanced fields. Under **Relative moves**:
+
+- Set **Relative move mode** to **Generic**
+- Set **Pan scale** and **Tilt scale**, e.g.: `-0.24` and `-0.27`
+
+</TabItem>
+<TabItem value="yaml">
+
+```yaml
+cameras:
+  ptz_camera:
+    onvif:
+      relative_move:
+        mode: generic
+        pan_scale: -0.24
+        tilt_scale: -0.27
+```
+
+</TabItem>
+</ConfigTabs>
+
+The scales are the generic units that move the view by half the frame, negative when the camera turns the other way. Each scale is between -2 and 2 and cannot be 0, and both are required in generic mode. To measure them, open the PTZ tab of the debug view next to the live view:
+
+1. With the PTZ buttons, turn the camera until a landmark is at the right edge of the frame and note `pan` in the PTZ tab. Turn until the landmark is in the center and note `pan` again. The difference is the size of `pan_scale`.
+2. Do the same with the top edge for `tilt_scale`.
+3. Set `mode: generic` with both scales positive and click an object right of the center. If the camera turns away from it, make `pan_scale` negative. Do the same with an object above the center for `tilt_scale`.
+
+These steps assume that the generic range shown in the PTZ tab is -1 to 1, because Frigate applies the scales before it maps the move onto that range. For a range such as -0.5 to 0.5, divide the measured difference by 0.5.
+
+- Generic moves are in the camera's pan and tilt units and do not follow zoom, unlike field of view moves. Measure the scales with the camera fully zoomed out. When the camera is zoomed in, generic moves turn too far, so generic mode suits cameras without zoom, or autotracking with `zooming` disabled.
+- On a camera with continuous pan, measure away from the point where the reported pan wraps from 1 to -1.
+
+Generic mode needs the camera to offer the generic relative space. If it does not, click to move is not offered and autotracking is disabled with a message saying so.
+
 ### Managing presets and the home position
 
 Admin users can manage the camera's ONVIF presets directly from the PTZ controls in the Live view, without opening the camera's own web interface. The presets menu offers to save the camera's current position as a new preset, to set the current position as the home position, and to open a preset manager where presets can be overwritten or deleted. A home button appears when the camera reports home position support.

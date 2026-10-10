@@ -1241,6 +1241,22 @@
         "description": "Internal field to track whether autotracking was enabled in configuration."
       }
     },
+    "relative_move": {
+      "label": "Relative moves",
+      "description": "How click to move and autotracking turn the camera.",
+      "mode": {
+        "label": "Relative move mode",
+        "description": "How click to move and autotracking turn the camera: fov moves by fractions of the camera's field of view, generic moves by the camera's own units scaled by the pan and tilt scales. Use generic for cameras that carry out field of view moves wrongly."
+      },
+      "pan_scale": {
+        "label": "Pan scale",
+        "description": "Generic pan units that move the view by half the frame width. Negative if the camera turns the other way. Required in generic mode."
+      },
+      "tilt_scale": {
+        "label": "Tilt scale",
+        "description": "Generic tilt units that move the view by half the frame height. Negative if the camera tilts the other way. Required in generic mode."
+      }
+    },
     "ignore_time_mismatch": {
       "label": "Ignore time mismatch",
       "description": "Ignore time synchronization differences between camera and Frigate server for ONVIF communication."

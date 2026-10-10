@@ -5,6 +5,7 @@ type PtzFeature =
   | "zoom-r"
   | "zoom-a"
   | "pt-r-fov"
+  | "pt-r-generic"
   | "focus"
   | "home"
   | "home-set";
@@ -76,6 +77,7 @@ export type PtzCapabilities = {
   features: string[];
   relative_spaces: PtzRelativeSpace[];
   default_relative_space: string | null;
+  relative_mode: "fov" | "generic";
 };
 
 export type PtzDebugResponse = {

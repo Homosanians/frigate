@@ -16,6 +16,7 @@ import {
 import useKeyboardListener from "@/hooks/use-keyboard-listener";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 import { CameraPtzInfo, PtzPreset } from "@/types/ptz";
+import { FrigateConfig } from "@/types/frigateConfig";
 import React, { useCallback, useMemo, useState } from "react";
 import { isMobile } from "react-device-detect";
 import { BsThreeDotsVertical } from "react-icons/bs";
@@ -56,6 +57,13 @@ export default function PtzControlPanel({
   const { data: ptz } = useSWR<CameraPtzInfo>(
     enabled ? `${camera}/ptz/info` : null,
   );
+  const { data: config } = useSWR<FrigateConfig>("config");
+
+  // the camera needs the relative moves of its mode, as the backend checks
+  const canClickToMove =
+    config?.cameras[camera]?.onvif?.relative_move?.mode === "generic"
+      ? ptz?.features?.includes("pt-r-generic")
+      : ptz?.features?.includes("pt-r-fov");
 
   const { send: sendPtz } = usePtzCommand(camera);
 
@@ -315,7 +323,7 @@ export default function PtzControlPanel({
         </TooltipButton>
       )}
 
-      {ptz?.features?.includes("pt-r-fov") && (
+      {canClickToMove && (
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

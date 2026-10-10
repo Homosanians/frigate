@@ -22,7 +22,7 @@ When tracking has ended, Frigate will return to the camera firmware's PTZ preset
 
 ## Checking ONVIF camera support
 
-Frigate autotracking functions with PTZ cameras capable of relative movement within the field of view (as specified in the [ONVIF spec](https://www.onvif.org/specs/srv/ptz/ONVIF-PTZ-Service-Spec-v1712.pdf) as `RelativePanTiltTranslationSpace` having a `TranslationSpaceFov` entry).
+Frigate autotracking functions with PTZ cameras capable of relative movement within the field of view (as specified in the [ONVIF spec](https://www.onvif.org/specs/srv/ptz/ONVIF-PTZ-Service-Spec-v1712.pdf) as `RelativePanTiltTranslationSpace` having a `TranslationSpaceFov` entry). A camera with a `TranslationGenericSpace` entry works too when [relative move mode](cameras.md#relative-move-mode) is set to generic.
 
 Many cheaper or older PTZs may not support this standard. Frigate will report an error message in the log and disable autotracking if your PTZ is unsupported.
 
@@ -269,8 +269,9 @@ Frigate uses the `movement_weights` measured during calibration to predict how f
 - Remove the `movement_weights` entry from your config and restart Frigate to run without calibration. If tracking improves, try recalibrating.
 - Recalibrate several times. The `movement_weights` values should be close to each other after each run. If they vary significantly between runs, your camera may not be reporting its motor status reliably, and you may get better results without calibration.
 - If you are using zooming, a high `zoom_factor` can cause the camera to zoom in too far and lose the object. Try a lower value.
+- If the camera reports field of view support but carries out the moves wrongly (the PTZ tab of the [debug view](#watching-what-the-camera-does) shows a position that does not match the move Frigate asked for), move it in its generic space with [relative move mode](cameras.md#relative-move-mode) instead.
 
-Remember to recalibrate whenever you change your `return_preset`, change your camera's detect `fps`, or enable zooming after calibrating with it disabled.
+Remember to recalibrate whenever you change your `return_preset`, change your camera's detect `fps`, change the relative move mode or scales, or enable zooming after calibrating with it disabled.
 
 </FaqItem>
 

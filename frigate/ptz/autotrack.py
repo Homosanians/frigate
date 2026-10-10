@@ -19,7 +19,12 @@ from norfair.camera_motion import (
 
 from frigate.camera import PTZMetrics
 from frigate.comms.dispatcher import Dispatcher
-from frigate.config import CameraConfig, FrigateConfig, ZoomingModeEnum
+from frigate.config import (
+    CameraConfig,
+    FrigateConfig,
+    RelativeMoveModeEnum,
+    ZoomingModeEnum,
+)
 from frigate.config.camera.updater import (
     CameraConfigUpdateEnum,
     CameraConfigUpdateSubscriber,
@@ -548,8 +553,8 @@ class PtzAutoTracker(threading.Thread):
                 self._disable(camera, "Unable to initialize onvif")
                 return
 
-            if "pt-r-fov" not in self.onvif.cams[camera]["features"]:
-                self._disable(camera, "FOV relative movement not supported")
+            if reason := self._relative_move_unsupported(camera):
+                self._disable(camera, reason)
                 return
 
             move_status_supported = await self.onvif.get_service_capabilities(camera)
@@ -560,8 +565,8 @@ class PtzAutoTracker(threading.Thread):
 
         # a camera without PTZ stays initialized after the live view or an
         # earlier setup, so setup can find it initialized already
-        elif "pt-r-fov" not in self.onvif.cams[camera]["features"]:
-            self._disable(camera, "FOV relative movement not supported")
+        elif reason := self._relative_move_unsupported(camera):
+            self._disable(camera, reason)
             return
 
         if self.onvif.cams[camera]["init"]:
@@ -613,6 +618,20 @@ class PtzAutoTracker(threading.Thread):
             if self.calibrating.get(camera)
             else PtzSource.autotrack
         )
+
+    def _relative_move_unsupported(self, camera: str) -> str | None:
+        """Why the camera can't make the relative moves of its mode, or None."""
+        mode = self.config.cameras[camera].onvif.relative_move.mode
+
+        if mode == RelativeMoveModeEnum.generic:
+            feature, name = "pt-r-generic", "Generic"
+        else:
+            feature, name = "pt-r-fov", "FOV"
+
+        if feature in self.onvif.cams[camera]["features"]:
+            return None
+
+        return f"{name} relative movement not supported"
 
     def _watched(self, camera: str) -> bool:
         """Whether the camera's PTZ log is open, checked before building entries."""

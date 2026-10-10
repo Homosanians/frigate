@@ -106,6 +106,13 @@ function PtzDebugHeader({
           {t("debug.ptz.defaultSpace", { space: defaultSpace })}
         </div>
       )}
+      {response.capabilities?.relative_mode && (
+        <div className="text-muted-foreground">
+          {t("debug.ptz.relativeMode", {
+            mode: response.capabilities.relative_mode,
+          })}
+        </div>
+      )}
       {failed && (
         <div className="text-destructive">{t("debug.ptz.pollFailed")}</div>
       )}

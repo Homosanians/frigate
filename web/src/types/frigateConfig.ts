@@ -213,6 +213,11 @@ export interface CameraConfig {
       zoom_factor: number;
       zooming: string;
     };
+    relative_move: {
+      mode: "fov" | "generic";
+      pan_scale: number | null;
+      tilt_scale: number | null;
+    };
     host: string;
     password: string | null;
     port: number;

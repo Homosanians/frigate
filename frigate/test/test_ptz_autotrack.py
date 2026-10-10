@@ -23,7 +23,7 @@ import numpy as np
 from norfair.camera_motion import HomographyTransformation, TranslationTransformation
 
 from frigate.camera import PTZMetrics
-from frigate.config import FrigateConfig
+from frigate.config import FrigateConfig, RelativeMoveConfig
 from frigate.config.camera.updater import CameraConfigUpdateEnum
 from frigate.ptz.autotrack import (
     PtzAutoTracker,
@@ -777,6 +777,61 @@ class TestAutotrackerSetupWithoutPtz(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(tracker.autotracker_init.get(CAMERA))
         tracker.onvif.get_camera_status.assert_not_awaited()
         tracker._process_move_queue.assert_not_called()
+
+
+class TestRelativeMoveModeSetup(unittest.IsolatedAsyncioTestCase):
+    """Autotracking needs the relative moves of the camera's configured mode."""
+
+    def _tracker(self, mode: str, features: list[str]) -> PtzAutoTracker:
+        tracker = _make_tracker()
+
+        if mode == "generic":
+            tracker.config.cameras[CAMERA].onvif.relative_move = RelativeMoveConfig(
+                mode="generic", pan_scale=-0.24, tilt_scale=-0.27
+            )
+
+        tracker.tracked_object_history = {}
+        tracker.tracked_object_metrics = {}
+        tracker.calibrating = {}
+        tracker.move_metrics = {}
+        tracker.intercept = {}
+        tracker.move_coefficients = {}
+        tracker.zoom_time = {}
+        tracker.move_queues = {}
+        tracker.move_queue_locks = {}
+        tracker.calibration_tasks = {}
+        tracker.onvif.cams = {CAMERA: {"init": True, "features": features}}
+        tracker.onvif.get_camera_status = AsyncMock()
+        tracker.onvif.loop = asyncio.get_running_loop()
+        tracker._process_move_queue = AsyncMock()
+        tracker._disable = MagicMock()
+        return tracker
+
+    async def test_generic_camera_without_fov_can_autotrack(self) -> None:
+        tracker = self._tracker("generic", ["pt", "pt-r-generic"])
+
+        await tracker._autotracker_setup(tracker.config.cameras[CAMERA], CAMERA)
+
+        tracker._disable.assert_not_called()
+        self.assertTrue(tracker.autotracker_init[CAMERA])
+
+    async def test_generic_camera_without_generic_moves_is_disabled(self) -> None:
+        tracker = self._tracker("generic", ["pt", "pt-r-fov"])
+
+        await tracker._autotracker_setup(tracker.config.cameras[CAMERA], CAMERA)
+
+        tracker._disable.assert_called_once_with(
+            CAMERA, "Generic relative movement not supported"
+        )
+
+    async def test_fov_camera_still_needs_fov_moves(self) -> None:
+        tracker = self._tracker("fov", ["pt", "pt-r-generic"])
+
+        await tracker._autotracker_setup(tracker.config.cameras[CAMERA], CAMERA)
+
+        tracker._disable.assert_called_once_with(
+            CAMERA, "FOV relative movement not supported"
+        )
 
 
 class TestReturnToPreset(unittest.IsolatedAsyncioTestCase):

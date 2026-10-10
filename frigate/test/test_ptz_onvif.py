@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from onvif import ONVIFError
 
 from frigate.camera import PTZMetrics
-from frigate.config import FrigateConfig
+from frigate.config import FrigateConfig, RelativeMoveConfig, RelativeMoveModeEnum
 from frigate.ptz.autotrack import ptz_moving_at_frame_time
 from frigate.ptz.event_log import PtzEventLog, PtzSource
 from frigate.ptz.onvif import (
@@ -31,6 +31,7 @@ from frigate.ptz.onvif import (
     OnvifUnavailableError,
     describe_relative_spaces,
     describe_status,
+    relative_space_index,
 )
 
 CAMERA = "ptz_cam"
@@ -1196,6 +1197,328 @@ class TestPtzDebugSnapshot(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(snapshot["capabilities"])
         controller._init_onvif.assert_not_awaited()
         controller.cams[CAMERA]["ptz"].GetStatus.assert_not_awaited()
+
+
+FOV_URI = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov"
+GENERIC_URI = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace"
+
+
+class _Zeep(dict):
+    """zeep objects allow both item and attribute access."""
+
+    def __getattr__(self, name: str):
+        try:
+            return self[name]
+        except KeyError as e:
+            raise AttributeError(name) from e
+
+    def __setattr__(self, name: str, value) -> None:
+        self[name] = value
+
+
+def _space(uri: str, x: float = 1.0, y: float = 1.0) -> _Zeep:
+    return _Zeep(
+        URI=uri,
+        XRange=_Zeep(Min=-x, Max=x),
+        YRange=_Zeep(Min=-y, Max=y),
+    )
+
+
+def _spaces_options() -> _Zeep:
+    return _Zeep(
+        Spaces=_Zeep(
+            RelativePanTiltTranslationSpace=[_space(GENERIC_URI), _space(FOV_URI)]
+        )
+    )
+
+
+def _make_generic_move_controller(
+    pan_scale: float, tilt_scale: float, autotracking_enabled: bool = False
+) -> OnvifController:
+    """A move controller for a camera set to generic relative moves, whose
+    generic range is -1..1 on both axes."""
+    controller = _make_move_controller(autotracking_enabled)
+    relative_move = RelativeMoveConfig(
+        mode="generic", pan_scale=pan_scale, tilt_scale=tilt_scale
+    )
+    controller.config.cameras[CAMERA].onvif.relative_move = relative_move
+    cam = controller.cams[CAMERA]
+    cam["features"] = ["pt", "pt-r-generic"]
+    cam["relative_move"] = relative_move
+    cam["relative_generic_range"] = {
+        "XRange": {"Min": -1.0, "Max": 1.0},
+        "YRange": {"Min": -1.0, "Max": 1.0},
+    }
+    return controller
+
+
+def _capture_moves(controller: OnvifController) -> list[tuple[float, float]]:
+    """Record the pan/tilt values each RelativeMove request carried."""
+    sent: list[tuple[float, float]] = []
+
+    async def relative_move(request) -> None:
+        sent.append(
+            (
+                float(request.Translation.PanTilt.x),
+                float(request.Translation.PanTilt.y),
+            )
+        )
+
+    controller.cams[CAMERA]["ptz"].RelativeMove = AsyncMock(side_effect=relative_move)
+    return sent
+
+
+class TestRelativeSpaceIndex(unittest.TestCase):
+    def test_finds_each_space(self) -> None:
+        options = _spaces_options()
+
+        self.assertEqual(relative_space_index(options, "TranslationGenericSpace"), 0)
+        self.assertEqual(relative_space_index(options, "TranslationSpaceFov"), 1)
+
+    def test_missing_space_or_options(self) -> None:
+        options = _Zeep(Spaces=_Zeep(RelativePanTiltTranslationSpace=[_space(FOV_URI)]))
+
+        self.assertIsNone(relative_space_index(options, "TranslationGenericSpace"))
+        self.assertIsNone(relative_space_index(None, "TranslationSpaceFov"))
+
+
+class TestRelativeSpaceInit(unittest.IsolatedAsyncioTestCase):
+    def _controller(self, mode: str, options: _Zeep | None = None) -> OnvifController:
+        controller = _make_controller(autotracking_enabled=False)
+
+        if mode == "generic":
+            controller.config.cameras[CAMERA].onvif.relative_move = RelativeMoveConfig(
+                mode="generic", pan_scale=-0.24, tilt_scale=-0.27
+            )
+
+        ptz = controller.cams[CAMERA]["onvif"].create_ptz_service.return_value
+        ptz.GetConfigurationOptions = AsyncMock(
+            return_value=options or _spaces_options()
+        )
+        # zeep builds requests with empty fields, which init then fills in
+        ptz.create_type = MagicMock(
+            side_effect=lambda name: MagicMock(
+                request_type=name, Translation=None, Speed=None
+            )
+        )
+        return controller
+
+    async def test_generic_space_is_detected(self) -> None:
+        controller = self._controller("fov")
+
+        self.assertTrue(await controller._init_onvif(CAMERA))
+
+        cam = controller.cams[CAMERA]
+        self.assertIn("pt-r-generic", cam["features"])
+        self.assertIn("pt-r-fov", cam["features"])
+        self.assertEqual(cam["relative_generic_range"]["URI"], GENERIC_URI)
+        self.assertEqual(cam["relative_fov_range"]["URI"], FOV_URI)
+
+    async def test_move_request_uses_the_configured_space(self) -> None:
+        for mode, uri in (("fov", FOV_URI), ("generic", GENERIC_URI)):
+            with self.subTest(mode=mode):
+                controller = self._controller(mode)
+
+                self.assertTrue(await controller._init_onvif(CAMERA))
+
+                cam = controller.cams[CAMERA]
+                request = cam["relative_move_request"]
+                self.assertEqual(request.Translation["PanTilt"]["space"], uri)
+                self.assertEqual(cam["relative_move"].mode, RelativeMoveModeEnum(mode))
+
+    async def test_generic_move_after_init(self) -> None:
+        # a range that is not -1..1, so the interpolation shows in the request
+        options = _Zeep(
+            Spaces=_Zeep(
+                RelativePanTiltTranslationSpace=[
+                    _space(GENERIC_URI, x=0.5, y=2.0),
+                    _space(FOV_URI),
+                ]
+            )
+        )
+        controller = self._controller("generic", options)
+        # the camera's position seeds the move request, as on a real camera
+        ptz = controller.cams[CAMERA]["onvif"].create_ptz_service.return_value
+        ptz.GetStatus = AsyncMock(
+            return_value=SimpleNamespace(
+                Position=_Zeep(PanTilt=_Zeep(x=0.0, y=0.0, space=None))
+            )
+        )
+        self.assertTrue(await controller._init_onvif(CAMERA))
+
+        cam = controller.cams[CAMERA]
+        cam["active"] = False
+        sent: list[tuple[str, float, float]] = []
+
+        async def relative_move(request) -> None:
+            pan_tilt = request.Translation.PanTilt
+            sent.append((pan_tilt.space, float(pan_tilt.x), float(pan_tilt.y)))
+
+        cam["ptz"].RelativeMove = AsyncMock(side_effect=relative_move)
+
+        self.assertTrue(
+            await controller._move_relative(
+                CAMERA, 0.5, -0.5, 0, 1, source=PtzSource.command
+            )
+        )
+
+        # 0.5 * -0.24 and -0.5 * -0.27 in the generic space, then into its range
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][0], GENERIC_URI)
+        self.assertAlmostEqual(sent[0][1], -0.06)
+        self.assertAlmostEqual(sent[0][2], 0.27)
+
+    async def test_generic_mode_on_a_fov_only_camera(self) -> None:
+        options = _Zeep(Spaces=_Zeep(RelativePanTiltTranslationSpace=[_space(FOV_URI)]))
+        controller = self._controller("generic", options)
+        self.assertTrue(await controller._init_onvif(CAMERA))
+
+        cam = controller.cams[CAMERA]
+        self.assertNotIn("pt-r-generic", cam["features"])
+        self.assertNotIn("relative_move_request", cam)
+
+        cam["active"] = False
+        cam["ptz"].RelativeMove = AsyncMock()
+        log = _watch(controller)
+
+        sent = await controller._move_relative(
+            CAMERA, 0.5, -0.5, 0, 1, source=PtzSource.command
+        )
+
+        self.assertFalse(sent)
+        cam["ptz"].RelativeMove.assert_not_awaited()
+        (entry,) = _logged(log)
+        self.assertEqual(entry["kind"], "refused")
+        self.assertEqual(entry["data"]["reason"], "unsupported")
+
+
+class TestGenericRelativeMoves(unittest.IsolatedAsyncioTestCase):
+    async def test_moves_are_scaled_into_the_generic_space(self) -> None:
+        controller = _make_generic_move_controller(pan_scale=-0.25, tilt_scale=0.5)
+        sent = _capture_moves(controller)
+
+        await controller._move_relative(
+            CAMERA, 0.8, -0.4, 0, 1, source=PtzSource.command
+        )
+
+        self.assertEqual(len(sent), 1)
+        self.assertAlmostEqual(sent[0][0], -0.2)
+        self.assertAlmostEqual(sent[0][1], -0.2)
+
+    async def test_generic_range_is_used(self) -> None:
+        controller = _make_generic_move_controller(pan_scale=-0.25, tilt_scale=0.5)
+        controller.cams[CAMERA]["relative_generic_range"] = {
+            "XRange": {"Min": -0.5, "Max": 0.5},
+            "YRange": {"Min": -2.0, "Max": 2.0},
+        }
+        sent = _capture_moves(controller)
+
+        await controller._move_relative(
+            CAMERA, 0.8, -0.4, 0, 1, source=PtzSource.command
+        )
+
+        self.assertAlmostEqual(sent[0][0], -0.1)
+        self.assertAlmostEqual(sent[0][1], -0.4)
+
+    async def test_moves_are_clipped_to_the_space(self) -> None:
+        controller = _make_generic_move_controller(pan_scale=2.0, tilt_scale=-2.0)
+        sent = _capture_moves(controller)
+
+        await controller._move_relative(
+            CAMERA, 0.9, 0.9, 0, 1, source=PtzSource.command
+        )
+
+        self.assertEqual(sent, [(1.0, -1.0)])
+
+    async def test_metrics_keep_the_frame_fractions(self) -> None:
+        # the autotracker's video settle observer measures the move in frames
+        controller = _make_generic_move_controller(
+            pan_scale=-0.25, tilt_scale=0.5, autotracking_enabled=True
+        )
+        _capture_moves(controller)
+
+        await controller._move_relative(
+            CAMERA, 0.8, -0.4, 0, 1, source=PtzSource.autotrack
+        )
+
+        metrics = controller.ptz_metrics[CAMERA]
+        self.assertAlmostEqual(metrics.move_pan.value, 0.8)
+        self.assertAlmostEqual(metrics.move_tilt.value, -0.4)
+
+    async def test_refused_without_generic_support(self) -> None:
+        controller = _make_generic_move_controller(pan_scale=-0.25, tilt_scale=0.5)
+        controller.cams[CAMERA]["features"] = ["pt", "pt-r-fov"]
+        log = _watch(controller)
+
+        sent = await controller._move_relative(
+            CAMERA, 0.8, -0.4, 0, 1, source=PtzSource.command
+        )
+
+        self.assertFalse(sent)
+        controller.cams[CAMERA]["ptz"].RelativeMove.assert_not_awaited()
+        (entry,) = _logged(log)
+        self.assertEqual(entry["kind"], "refused")
+        self.assertEqual(entry["data"]["reason"], "unsupported")
+
+    async def test_move_uses_the_settings_from_init(self) -> None:
+        # a config update replaces the live settings before the camera is
+        # initialized again
+        controller = _make_generic_move_controller(pan_scale=-0.25, tilt_scale=0.5)
+        controller.config.cameras[CAMERA].onvif.relative_move = RelativeMoveConfig()
+        sent = _capture_moves(controller)
+
+        moved = await controller._move_relative(
+            CAMERA, 0.8, -0.4, 0, 1, source=PtzSource.command
+        )
+
+        self.assertTrue(moved)
+        self.assertEqual(len(sent), 1)
+        self.assertAlmostEqual(sent[0][0], -0.2)
+        self.assertAlmostEqual(sent[0][1], -0.2)
+        self.assertFalse(controller.cams[CAMERA]["active"])
+        self.assertEqual(controller._capabilities(CAMERA)["relative_mode"], "generic")
+
+    async def test_log_records_the_generic_space(self) -> None:
+        controller = _make_generic_move_controller(pan_scale=-0.25, tilt_scale=0.5)
+        _capture_moves(controller)
+        log = _watch(controller)
+
+        await controller._move_relative(
+            CAMERA, 0.8, -0.4, 0, 1, source=PtzSource.command
+        )
+
+        (entry,) = _logged(log)
+        data = entry["data"]
+        self.assertEqual(data["space"], "generic")
+        self.assertEqual((data["pan"], data["tilt"]), (0.8, -0.4))
+        self.assertAlmostEqual(data["x"], -0.2)
+        self.assertAlmostEqual(data["y"], -0.2)
+        self.assertEqual(controller._capabilities(CAMERA)["relative_mode"], "generic")
+
+    async def test_fov_mode_ignores_the_scales(self) -> None:
+        controller = _make_move_controller(autotracking_enabled=False)
+        controller.config.cameras[CAMERA].onvif.relative_move = RelativeMoveConfig(
+            pan_scale=-0.25, tilt_scale=0.5
+        )
+        sent = _capture_moves(controller)
+
+        await controller._move_relative(
+            CAMERA, 0.8, -0.4, 0, 1, source=PtzSource.command
+        )
+
+        self.assertEqual(len(sent), 1)
+        self.assertAlmostEqual(sent[0][0], 0.8)
+        self.assertAlmostEqual(sent[0][1], -0.4)
+        self.assertEqual(controller._capabilities(CAMERA)["relative_mode"], "fov")
+
+    def test_capabilities_report_the_configured_mode_before_init(self) -> None:
+        # a camera that was not set up has no snapshot of the settings yet
+        controller = _make_move_controller(autotracking_enabled=False)
+        controller.config.cameras[CAMERA].onvif.relative_move = RelativeMoveConfig(
+            mode="generic", pan_scale=-0.25, tilt_scale=0.5
+        )
+
+        self.assertEqual(controller._capabilities(CAMERA)["relative_mode"], "generic")
 
 
 if __name__ == "__main__":

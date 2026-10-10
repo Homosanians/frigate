@@ -1131,6 +1131,15 @@ cameras:
       # If not set, the first profile with valid PTZ configuration is selected automatically.
       # Use this when your camera has multiple ONVIF profiles and you need to select a specific one.
       profile: None
+      # Optional: How click to move and autotracking turn the camera.
+      # Use generic mode for cameras that carry out field of view moves wrongly.
+      relative_move:
+        # Optional: fov or generic (default: shown below)
+        mode: fov
+        # Required in generic mode: generic units that move the view by half the frame
+        # width or height, negative when the camera turns the other way. (default: shown below)
+        pan_scale: None
+        tilt_scale: None
       # Optional: Set the camera's NTP server and timezone over ONVIF at startup and whenever
       # this setting changes. Requires an ONVIF user with administrator rights.
       # NOTE: Can be set for all cameras with the global onvif section.

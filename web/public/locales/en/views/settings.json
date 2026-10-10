@@ -1043,6 +1043,7 @@
       "spaces": "Relative move spaces: {{spaces}}",
       "space": "{{space}} (x {{xMin}} to {{xMax}}, y {{yMin}} to {{yMax}})",
       "defaultSpace": "Default relative move space: {{space}}",
+      "relativeMode": "Relative move mode: {{mode}}",
       "count_one": "{{count}} entry",
       "count_other": "{{count}} entries",
       "pause": "Pause",
@@ -2145,6 +2146,12 @@
         "disabled": "Disabled",
         "absolute": "Absolute",
         "relative": "Relative"
+      }
+    },
+    "relative_move": {
+      "mode": {
+        "fov": "Field of view",
+        "generic": "Generic"
       }
     }
   },

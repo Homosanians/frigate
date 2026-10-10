@@ -8,6 +8,7 @@ const onvif: SectionConfigOverrides = {
       "autotracking.calibrate_on_startup":
         "/configuration/autotracking#calibration",
       time_sync: "/configuration/cameras#synchronizing-camera-time",
+      relative_move: "/configuration/cameras#relative-move-mode",
     },
     fieldOrder: [
       "host",
@@ -18,6 +19,7 @@ const onvif: SectionConfigOverrides = {
       "tls_insecure",
       "ignore_time_mismatch",
       "time_sync",
+      "relative_move",
       "autotracking",
     ],
     hiddenFields: [
@@ -27,6 +29,7 @@ const onvif: SectionConfigOverrides = {
     advancedFields: [
       "tls_insecure",
       "ignore_time_mismatch",
+      "relative_move",
       "autotracking.stream_latency",
     ],
     overrideFields: [],
@@ -67,6 +70,20 @@ const onvif: SectionConfigOverrides = {
         },
         timezone: {
           "ui:options": { size: "sm" },
+        },
+      },
+      relative_move: {
+        mode: {
+          "ui:options": {
+            size: "xs",
+            enumI18nPrefix: "onvif.relative_move.mode",
+          },
+        },
+        pan_scale: {
+          "ui:options": { size: "xs" },
+        },
+        tilt_scale: {
+          "ui:options": { size: "xs" },
         },
       },
       autotracking: {

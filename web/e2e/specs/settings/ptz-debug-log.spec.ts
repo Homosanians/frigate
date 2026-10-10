@@ -36,6 +36,7 @@ const SNAPSHOT = {
       { space: "fov", x: [-1, 1], y: [-1, 1] },
     ],
     default_relative_space: "generic",
+    relative_mode: "generic",
   },
   status: STATUS,
   seq: 3,
@@ -144,6 +145,7 @@ test.describe("PTZ debug log @medium @mobile", () => {
     await expect(status).toContainText(
       "generic (x -1.00 to 1.00, y -1.00 to 1.00), fov (x -1.00 to 1.00, y -1.00 to 1.00)",
     );
+    await expect(status).toContainText("Relative move mode: generic");
 
     const rows = frigateApp.page.getByTestId("ptz-debug-row");
     await expect(rows).toHaveCount(3);
@@ -182,6 +184,7 @@ test.describe("PTZ debug log @medium @mobile", () => {
       .toContain("front_door");
     const text = await readClipboard(frigateApp.page);
     expect(text).toContain("pan -0.201, tilt 1.000");
+    expect(text).toContain("Relative move mode: generic");
     // the summary line, then the full entry for pasting into an issue
     expect(text).toContain("RelativeMove in fov space");
     expect(text).toContain('"operation":"RelativeMove"');

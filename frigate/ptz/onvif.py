@@ -17,7 +17,7 @@ from onvif import ONVIFCamera, ONVIFService
 from zeep.exceptions import Fault
 
 from frigate.camera import PTZMetrics
-from frigate.config import FrigateConfig, ZoomingModeEnum
+from frigate.config import FrigateConfig, RelativeMoveModeEnum, ZoomingModeEnum
 from frigate.config.camera.onvif import OnvifTimeSyncConfig
 from frigate.config.camera.updater import (
     CameraConfigUpdateEnum,
@@ -276,6 +276,23 @@ def describe_relative_spaces(options: Any) -> list[dict[str, Any]]:
             continue
 
     return described
+
+
+def relative_space_index(options: Any, marker: str) -> int | None:
+    """Index of the relative pan/tilt space whose URI contains marker."""
+    try:
+        return next(
+            (
+                i
+                for i, space in enumerate(
+                    options.Spaces.RelativePanTiltTranslationSpace
+                )
+                if marker in space["URI"]
+            ),
+            None,
+        )
+    except (AttributeError, TypeError):
+        return None
 
 
 def _log_request(
@@ -669,7 +686,6 @@ class OnvifController:
 
         # get PTZ configuration options for feature detection and relative movement
         ptz_config = None
-        fov_space_id = None
 
         try:
             request = ptz.create_type("GetConfigurationOptions")
@@ -688,30 +704,28 @@ class OnvifController:
             configs.DefaultRelativePanTiltTranslationSpace
         )
 
-        # detect FOV translation space for relative movement
-        if ptz_config is not None:
-            try:
-                fov_space_id = next(
-                    (
-                        i
-                        for i, space in enumerate(
-                            ptz_config.Spaces.RelativePanTiltTranslationSpace
-                        )
-                        if "TranslationSpaceFov" in space["URI"]
-                    ),
-                    None,
-                )
-            except (AttributeError, TypeError):
-                fov_space_id = None
+        # click to move and autotracking send their moves in the space of the
+        # camera's relative move mode
+        fov_space_id = relative_space_index(ptz_config, "TranslationSpaceFov")
+        generic_space_id = relative_space_index(ptz_config, "TranslationGenericSpace")
+        # keep the settings this camera was set up with, a config update can replace
+        # the live ones before the camera is initialized again
+        relative_move = camera_config.onvif.relative_move
+        relative_space_id = (
+            generic_space_id
+            if relative_move.mode == RelativeMoveModeEnum.generic
+            else fov_space_id
+        )
+        cam["relative_move"] = relative_move
 
         autotracking_config = camera_config.onvif.autotracking
         autotracking_enabled = (
             autotracking_config.enabled_in_config and autotracking_config.enabled
         )
 
-        # setup relative move request when FOV relative movement is supported
+        # setup relative move request when the mode's relative space is supported
         if (
-            fov_space_id is not None
+            relative_space_id is not None
             and configs.DefaultRelativePanTiltTranslationSpace is not None
         ):
             # one-off GetStatus to seed Translation field
@@ -726,19 +740,19 @@ class OnvifController:
             rel_move_request.ProfileToken = profile.token
             logger.debug(f"{camera_name}: Relative move request: {rel_move_request}")
 
-            fov_uri = ptz_config["Spaces"]["RelativePanTiltTranslationSpace"][
-                fov_space_id
+            space_uri = ptz_config["Spaces"]["RelativePanTiltTranslationSpace"][
+                relative_space_id
             ]["URI"]
 
             if rel_move_request.Translation is None:
                 if status is not None:
                     # seed from current position
                     rel_move_request.Translation = status.Position
-                    rel_move_request.Translation.PanTilt.space = fov_uri
+                    rel_move_request.Translation.PanTilt.space = space_uri
                 else:
                     # fallback: construct Translation explicitly
                     rel_move_request.Translation = {
-                        "PanTilt": {"x": 0, "y": 0, "space": fov_uri}
+                        "PanTilt": {"x": 0, "y": 0, "space": space_uri}
                     }
 
             # configure zoom on relative move request
@@ -878,6 +892,16 @@ class OnvifController:
                 ptz_config.Spaces.RelativePanTiltTranslationSpace[fov_space_id]
             )
 
+        # detect generic relative movement support
+        if (
+            generic_space_id is not None
+            and configs.DefaultRelativePanTiltTranslationSpace is not None
+        ):
+            supported_features.append("pt-r-generic")
+            cam["relative_generic_range"] = (
+                ptz_config.Spaces.RelativePanTiltTranslationSpace[generic_space_id]
+            )
+
         cam["features"] = supported_features
         cam["init"] = True
         return True
@@ -960,10 +984,21 @@ class OnvifController:
     def _capabilities(self, camera_name: str) -> dict[str, Any]:
         """How the camera can move, for the PTZ log."""
         cam = self.cams[camera_name]
+        relative_move = cam.get("relative_move")
+
+        # a camera that was not set up yet reports the configured mode
+        camera_config = self.config.cameras.get(camera_name)
+
+        if relative_move is None and camera_config is not None:
+            relative_move = camera_config.onvif.relative_move
+
+        mode = relative_move.mode if relative_move else RelativeMoveModeEnum.fov
+
         return {
             "features": list(cam["features"]),
             "relative_spaces": cam.get("relative_spaces", []),
             "default_relative_space": cam.get("default_relative_space"),
+            "relative_mode": mode.value,
         }
 
     def _record_connection(self, camera_name: str, connected: bool) -> None:
@@ -1061,11 +1096,20 @@ class OnvifController:
     async def _move_relative(
         self, camera_name: str, pan, tilt, zoom, speed, *, source: PtzSource
     ) -> bool:
-        """Send a relative FOV move, returning False if it was not sent."""
-        cam = self.cams[camera_name]
+        """Send a relative move, returning False if it was not sent.
 
-        if "pt-r-fov" not in cam["features"]:
-            logger.error(f"{camera_name} does not support ONVIF RelativeMove (FOV).")
+        pan and tilt are fractions of half the frame. In generic mode they are
+        scaled per axis into the camera's own units first.
+        """
+        cam = self.cams[camera_name]
+        relative_move = cam.get("relative_move")
+        mode = relative_move.mode if relative_move else RelativeMoveModeEnum.fov
+        generic = mode == RelativeMoveModeEnum.generic
+
+        if ("pt-r-generic" if generic else "pt-r-fov") not in cam["features"]:
+            logger.error(
+                "%s does not support ONVIF RelativeMove (%s)", camera_name, mode.value
+            )
             self._refused(camera_name, source, "RelativeMove", "unsupported")
             return False
 
@@ -1085,6 +1129,16 @@ class OnvifController:
             )
             self._refused(camera_name, source, "RelativeMove", "busy")
             return False
+
+        if generic:
+            # the generic space moves by the camera's own units, scaled with the
+            # settings from init so a config change cannot fail the move
+            scaled_pan = float(numpy.clip(pan * relative_move.pan_scale, -1, 1))
+            scaled_tilt = float(numpy.clip(tilt * relative_move.tilt_scale, -1, 1))
+            space_range = cam["relative_generic_range"]
+        else:
+            scaled_pan, scaled_tilt = pan, tilt
+            space_range = cam["relative_fov_range"]
 
         cam["active"] = True
 
@@ -1106,20 +1160,14 @@ class OnvifController:
         # function takes in -1 to 1 for pan and tilt, interpolate to the values of the camera.
         # The onvif spec says this can report as +INF and -INF, so this may need to be modified
         pan = numpy.interp(
-            pan,
+            scaled_pan,
             [-1, 1],
-            [
-                cam["relative_fov_range"]["XRange"]["Min"],
-                cam["relative_fov_range"]["XRange"]["Max"],
-            ],
+            [space_range["XRange"]["Min"], space_range["XRange"]["Max"]],
         )
         tilt = numpy.interp(
-            tilt,
+            scaled_tilt,
             [-1, 1],
-            [
-                cam["relative_fov_range"]["YRange"]["Min"],
-                cam["relative_fov_range"]["YRange"]["Max"],
-            ],
+            [space_range["YRange"]["Min"], space_range["YRange"]["Max"]],
         )
 
         move_speed = {"PanTilt": {"x": speed, "y": speed}}
@@ -1138,7 +1186,7 @@ class OnvifController:
 
         # the request is reused and reset below, so log its values now
         details = {
-            "space": "fov",
+            "space": mode.value,
             "pan": requested_pan,
             "tilt": requested_tilt,
             "zoom": finite_number(zoom) if include_zoom else 0.0,

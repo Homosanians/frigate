@@ -37,6 +37,15 @@ export function ptzLogText(
         }),
       );
     }
+
+    if (capabilities?.relative_mode) {
+      lines.push(
+        t("debug.ptz.relativeMode", {
+          ns: "views/settings",
+          mode: capabilities.relative_mode,
+        }),
+      );
+    }
   }
 
   lines.push("");
