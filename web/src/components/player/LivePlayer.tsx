@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { TbExclamationCircle } from "react-icons/tb";
 import { TooltipPortal } from "@radix-ui/react-tooltip";
 import { baseUrl } from "@/api/baseUrl";
+import axios from "axios";
 import { PlayerStats } from "./PlayerStats";
 import { LuVideoOff } from "react-icons/lu";
 import { Trans, useTranslation } from "react-i18next";
@@ -265,6 +266,14 @@ export default function LivePlayer({
     setLiveReady(true);
   }, []);
 
+  // a stream that starts between keyframes shows nothing until the next
+  // one, so a camera that can be asked over ONVIF sends one now
+  const requestKeyframe = useCallback(() => {
+    if (cameraConfig.onvif.host) {
+      axios.post(`${cameraConfig.name}/onvif/sync_point`).catch(() => {});
+    }
+  }, [cameraConfig.name, cameraConfig.onvif.host]);
+
   // enabled states
 
   const [isReEnabling, setIsReEnabling] = useState(false);
@@ -315,6 +324,7 @@ export default function LivePlayer({
         microphoneEnabled={micEnabled}
         iOSCompatFullScreen={iOSCompatFullScreen}
         onPlaying={playerIsPlaying}
+        onAttached={requestKeyframe}
         pip={pip}
         onError={onError}
         onHealthSample={onHealthSample}
@@ -335,6 +345,7 @@ export default function LivePlayer({
           getStats={showStats}
           setStats={setStats}
           onPlaying={playerIsPlaying}
+          onAttached={requestKeyframe}
           pip={pip}
           setFullResolution={handleFullResolution}
           onError={onError}

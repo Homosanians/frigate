@@ -41,6 +41,13 @@ TIME_SYNC_RETRY_SECONDS = 300
 CLOCK_SETTLE_SECONDS = 120
 CLOCK_POLL_SECONDS = 5
 CLOCK_SETTLED_OFFSET_SECONDS = 5
+# how soon a camera can be asked for another keyframe, so viewers that open a
+# stream together share one
+SYNC_POINT_INTERVAL_SECONDS = 1
+# a keyframe that comes later than this no longer helps the stream start
+SYNC_POINT_TIMEOUT_SECONDS = 3
+# how long a camera that did not answer a keyframe request is left alone
+SYNC_POINT_RETRY_SECONDS = 60
 
 
 class OnvifCommandEnum(str, Enum):
@@ -1984,6 +1991,84 @@ class OnvifController:
         await self._close_camera(camera_name)
         self.cams.pop(camera_name, None)
         await self._init_single_camera(camera_name, schedule_time_sync=False)
+
+    async def _get_media_service(self, camera_name: str) -> ONVIFService:
+        onvif: ONVIFCamera = self.cams[camera_name]["onvif"]
+
+        # a session that has not set up PTZ has not read where the camera's
+        # services are yet
+        async with self.device_locks.setdefault(camera_name, asyncio.Lock()):
+            if not onvif.xaddrs:
+                await onvif.update_xaddrs()
+
+        return await onvif.create_media_service()
+
+    async def _set_sync_points(self, camera_name: str) -> list[Any]:
+        """Ask for a keyframe on each of a camera's video profiles, returning
+        what each request raised or returned."""
+        cam = self.cams[camera_name]
+        media = await self._get_media_service(camera_name)
+
+        if "video_profiles" not in cam:
+            cam["video_profiles"] = [
+                p.token
+                for p in await media.GetProfiles()
+                if p.VideoEncoderConfiguration
+            ]
+
+        # which profile feeds the stream being watched is not known, so every
+        # video profile is asked
+        return await asyncio.gather(
+            *(
+                media.SetSynchronizationPoint({"ProfileToken": token})
+                for token in cam["video_profiles"]
+            ),
+            return_exceptions=True,
+        )
+
+    async def request_sync_point(self, camera_name: str) -> bool:
+        """Ask a camera to send a keyframe now.
+
+        A stream that starts playing between keyframes shows nothing until the
+        next one, which this brings forward. Returns whether the camera was asked.
+        """
+        cam = await self._get_onvif_session(camera_name)
+        now = time.monotonic()
+
+        if cam.get("sync_point_unsupported") or now < cam.get("sync_point_after", 0):
+            return False
+
+        # also holds off other viewers while this request is in flight
+        cam["sync_point_after"] = now + SYNC_POINT_RETRY_SECONDS
+
+        try:
+            results = await asyncio.wait_for(
+                self._set_sync_points(camera_name), SYNC_POINT_TIMEOUT_SECONDS
+            )
+        except Fault as e:
+            results = [e]
+        except Exception as e:
+            logger.debug(
+                f"Unable to request a keyframe from {camera_name}: {str(e) or type(e).__name__}"
+            )
+            return False
+
+        failures = [r for r in results if isinstance(r, BaseException)]
+
+        if len(failures) < len(results):
+            cam["sync_point_after"] = now + SYNC_POINT_INTERVAL_SECONDS
+            return True
+
+        if all(isinstance(failure, Fault) for failure in failures):
+            # the camera answered, so asking again will not change its mind
+            cam["sync_point_unsupported"] = True
+            logger.debug(
+                f"{camera_name} does not take ONVIF keyframe requests: {failures[0].message if failures else 'no video profiles'}"
+            )
+            return False
+
+        logger.debug(f"Unable to request a keyframe from {camera_name}: {failures[0]}")
+        return False
 
     async def get_service_capabilities(self, camera_name: str) -> None:
         if camera_name not in self.cams.keys():

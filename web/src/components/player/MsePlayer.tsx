@@ -27,6 +27,8 @@ type MSEPlayerProps = {
   getStats?: boolean;
   setStats?: (stats: PlayerStatsType) => void;
   onPlaying?: () => void;
+  // go2rtc has attached the player, so it gets the stream's next keyframe
+  onAttached?: () => void;
   setFullResolution?: React.Dispatch<SetStateAction<VideoResolutionType>>;
   onError?: (error: LivePlayerError) => void;
   onHealthSample?: (sample: LiveHealthSample) => void;
@@ -43,6 +45,7 @@ function MSEPlayer({
   getStats = false,
   setStats,
   onPlaying,
+  onAttached,
   setFullResolution,
   onError,
   onHealthSample,
@@ -100,11 +103,13 @@ function MSEPlayer({
   }, [camera]);
 
   // socket handlers are bound once per connection, so they reach the
-  // current onError through a ref
+  // current callbacks through refs
   const onErrorRef = useRef(onError);
+  const onAttachedRef = useRef(onAttached);
   useEffect(() => {
     onErrorRef.current = onError;
-  }, [onError]);
+    onAttachedRef.current = onAttached;
+  }, [onError, onAttached]);
 
   const handleError = useCallback(
     (error: LivePlayerError, description: string = "Unknown error") => {
@@ -450,6 +455,9 @@ function MSEPlayer({
 
     onmessageRef.current["mse"] = (msg) => {
       if (msg.type !== "mse") return;
+
+      // go2rtc adds the player to the stream before it answers
+      onAttachedRef.current?.();
 
       // Store the codec value for error logging
       mseCodecRef.current = msg.value;
