@@ -53,7 +53,6 @@ class TestHttpPtz(BaseTestHttp):
             set_home=AsyncMock(),
             get_device_info=AsyncMock(return_value=DEVICE_INFO),
             sync_time=AsyncMock(),
-            request_sync_point=AsyncMock(return_value=True),
         )
         self.app.onvif = self.onvif
 
@@ -233,42 +232,3 @@ class TestHttpPtz(BaseTestHttp):
 
                 assert response.status_code == status
                 assert str(error) in response.json()["message"]
-
-    def test_sync_point_requested_by_any_user_of_the_camera(self):
-        for headers in ({}, VIEWER):
-            with self.subTest(headers=headers):
-                with AuthTestClient(self.app) as client:
-                    response = client.post(
-                        f"/{CAMERA}/onvif/sync_point", headers=headers
-                    )
-
-                assert response.status_code == 200
-                assert response.json() == {"success": True, "requested": True}
-
-        self.onvif.request_sync_point.assert_awaited_with(CAMERA)
-
-    def test_sync_point_reports_a_skipped_request(self):
-        self.onvif.request_sync_point.return_value = False
-
-        with AuthTestClient(self.app) as client:
-            response = client.post(f"/{CAMERA}/onvif/sync_point")
-
-        assert response.status_code == 200
-        assert response.json() == {"success": True, "requested": False}
-
-    def test_sync_point_without_onvif(self):
-        error = OnvifUnavailableError("ONVIF is not configured")
-        self.onvif.request_sync_point.side_effect = error
-
-        with AuthTestClient(self.app) as client:
-            response = client.post(f"/{CAMERA}/onvif/sync_point")
-
-        assert response.status_code == 404
-        assert str(error) in response.json()["message"]
-
-    def test_sync_point_unknown_camera(self):
-        with AuthTestClient(self.app) as client:
-            response = client.post("/missing/onvif/sync_point")
-
-        assert response.status_code in (403, 404)
-        self.onvif.request_sync_point.assert_not_awaited()

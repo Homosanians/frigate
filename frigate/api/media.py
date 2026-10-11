@@ -386,19 +386,6 @@ async def camera_onvif_time_sync(request: Request, camera_name: str):
     )
 
 
-@router.post(
-    "/{camera_name}/onvif/sync_point",
-    dependencies=[Depends(require_camera_access)],
-    description="Ask the camera over ONVIF to send a keyframe now, so a live stream that just started playing does not wait for the next scheduled one. Requests are rate limited per camera, and `requested` reports whether this one was sent.",
-)
-async def camera_onvif_sync_point(request: Request, camera_name: str):
-    async def sync_point(camera_name: str) -> dict[str, bool]:
-        requested = await request.app.onvif.request_sync_point(camera_name)
-        return {"success": True, "requested": requested}
-
-    return await _onvif_request(request, camera_name, sync_point)
-
-
 @router.get(
     "/{camera_name}/latest.{extension}",
     dependencies=[Depends(require_camera_access)],

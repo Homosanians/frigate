@@ -491,8 +491,6 @@ These logs help identify if the issue is player-specific (MSE vs. WebRTC) or rel
 
 A delay when a stream first starts is usually caused by your camera's I-frame (keyframe) interval. Playback cannot begin until a keyframe arrives, so an interval set higher than your camera's frame rate makes the stream take longer to start. Set the I-frame interval to match the frame rate (or "1x" on Reolink) per the [camera settings recommendations](#camera-settings-recommendations).
 
-For a camera with an [ONVIF host configured](/configuration/cameras#setting-up-camera-ptz-controls), PTZ or not, Frigate also asks the camera for a keyframe as soon as a live stream starts, so the stream does not wait for the next scheduled one. Not every camera honors the request, so matching the I-frame interval to the frame rate is still recommended.
-
 A stream that starts on time but falls further behind live is buffering, which is usually the browser struggling to decode too many high-resolution streams at once. Select a lower-bandwidth substream for your dashboards (see [Setting Streams For Live UI](#setting-streams-for-live-ui)), reduce the number of streams open at once, or improve the network connection between your browser and Frigate. Frigate's player automatically speeds up playback to catch up to live after buffering, and falls back to low bandwidth mode if it stalls for too long. The _Reset_ option forces a fresh connection at the live edge.
 
 </FaqItem>

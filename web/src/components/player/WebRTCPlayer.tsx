@@ -25,8 +25,6 @@ type WebRtcPlayerProps = {
   setStats?: (stats: PlayerStatsType) => void;
   setFullResolution?: React.Dispatch<React.SetStateAction<VideoResolutionType>>;
   onPlaying?: () => void;
-  // the connection is up, so the player gets the stream's next keyframe
-  onAttached?: () => void;
   onFrame?: () => void;
   onError?: (error: LivePlayerError) => void;
   onHealthSample?: (sample: LiveHealthSample) => void;
@@ -46,7 +44,6 @@ export default function WebRtcPlayer({
   setStats,
   setFullResolution,
   onPlaying,
-  onAttached,
   onFrame,
   onError,
   onHealthSample,
@@ -94,12 +91,6 @@ export default function WebRtcPlayer({
   const micWsRef = useRef<WebSocket | null>(null);
   const [bufferTimeout, setBufferTimeout] = useState<NodeJS.Timeout>();
   const videoLoadTimeoutRef = useRef<NodeJS.Timeout>(undefined);
-
-  // a new callback must not reconnect the player
-  const onAttachedRef = useRef(onAttached);
-  useEffect(() => {
-    onAttachedRef.current = onAttached;
-  }, [onAttached]);
 
   const PeerConnection = useCallback(
     async (media: string) => {
@@ -212,13 +203,6 @@ export default function WebRtcPlayer({
       if (!pc) {
         return;
       }
-
-      // media sent before the connection is up is lost, keyframes included
-      pc.addEventListener("connectionstatechange", () => {
-        if (pc.connectionState === "connected") {
-          onAttachedRef.current?.();
-        }
-      });
 
       pcRef.current = pc;
       wsRef.current = new WebSocket(wsURL);

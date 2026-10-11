@@ -6184,40 +6184,6 @@ paths:
       security:
         - frigateAdminAuth: []
       x-required-role: admin
-  /{camera_name}/onvif/sync_point:
-    post:
-      tags:
-        - Media
-      summary: Camera Onvif Sync Point
-      description: |-
-        **Access:** Authenticated user with access to the referenced camera.
-
-        Ask the camera over ONVIF to send a keyframe now, so a live stream that just started playing does not wait for the next scheduled one. Requests are rate limited per camera, and `requested` reports whether this one was sent.
-      operationId: camera_onvif_sync_point__camera_name__onvif_sync_point_post
-      parameters:
-        - name: camera_name
-          in: path
-          required: true
-          schema:
-            anyOf:
-              - type: string
-              - type: 'null'
-            title: Camera Name
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema: {}
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-      security:
-        - frigateUserAuth: []
-      x-required-role: camera
   /{camera_name}/latest.{extension}:
     get:
       tags:
