@@ -7,6 +7,9 @@
  * Video fit decides how a picture fills a tile of a different shape, such as
  * a 4:3 substream still in a 16:9 tile.
  *
+ * Cameras per row fixes the default grid's column count instead of leaving it
+ * to the window's width.
+ *
  * The no-video badge flags a tile whose picture has stopped: Frigate reports
  * when a camera stops sending frames, and a live tile also watches its own
  * player for new frames.
@@ -166,6 +169,18 @@ function reviewStripBox(frigateApp: FrigateApp) {
   });
 }
 
+// how many columns the default grid lays its tiles out in
+function gridColumns(frigateApp: FrigateApp) {
+  return frigateApp.page.evaluate(() => {
+    const grid = document
+      .querySelector("[data-camera='front_door']")
+      ?.closest(".grid");
+    return grid
+      ? getComputedStyle(grid).gridTemplateColumns.split(" ").length
+      : null;
+  });
+}
+
 function cornerRadii(frigateApp: FrigateApp, camera: string) {
   return frigateApp.page.evaluate((cam) => {
     const card = document.querySelector(`[data-camera='${cam}']`);
@@ -262,6 +277,35 @@ test.describe("Live tile display @high", () => {
     await expect
       .poll(() => reviewStripBox(frigateApp), { timeout: 10_000 })
       .toEqual(before);
+  });
+
+  for (const columns of [2, 5] as const) {
+    test(`cameras per row lays the default grid out in ${columns} columns`, async ({
+      frigateApp,
+    }) => {
+      test.skip(frigateApp.isMobile, "Phones keep their list and grid toggle");
+
+      await openWithPreference(frigateApp, "/", "liveGridColumns", columns);
+
+      await expect.poll(() => gridColumns(frigateApp)).toBe(columns);
+      const { front_door: first, garage: third } = await cameraBoxes(
+        frigateApp.page,
+        ["front_door", "garage"] as const,
+        "card",
+      );
+      // the third camera wraps to a second row only when two fit per row
+      expect(third.y > first.y).toBe(columns === 2);
+    });
+  }
+
+  test("cameras per row does not apply on phones @mobile", async ({
+    frigateApp,
+  }) => {
+    test.skip(!frigateApp.isMobile, "Covers the phone layout");
+
+    await openWithPreference(frigateApp, "/", "liveGridColumns", 5);
+
+    await expect.poll(() => gridColumns(frigateApp)).toBe(1);
   });
 
   test("a mismatched still letterboxes by default", async ({ frigateApp }) => {

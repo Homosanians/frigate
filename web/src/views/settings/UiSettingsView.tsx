@@ -65,6 +65,8 @@ const WEEK_STARTS_ON = ["Sunday", "Monday"];
 const VIDEO_FITS: LiveVideoFit[] = ["contain", "fill", "cover"];
 // seconds; 0 turns the warning off
 const NO_VIDEO_WARNINGS = [0, 5, 10, 20, 30, 60];
+// 0 lets the window's width decide
+const GRID_COLUMNS = [0, 2, 3, 4, 5, 6];
 const IMPORT_FAILED_FLAG = "frigate-ui-settings-import-failed";
 
 type ConfirmTarget = "layouts" | "streaming" | "naturalAspect";
@@ -351,6 +353,10 @@ export default function UiSettingsView() {
     "noVideoWarning",
     0,
   );
+  const [gridColumns, setGridColumns] = useUserPersistence(
+    "liveGridColumns",
+    0,
+  );
   const [naturalAspect, setNaturalAspect] = useUserPersistence(
     "naturalAspectLayout",
     false,
@@ -374,6 +380,11 @@ export default function UiSettingsView() {
     fill: t("general.liveDashboard.videoFit.fill"),
     cover: t("general.liveDashboard.videoFit.cover"),
   };
+
+  const gridColumnsLabel = (columns: number) =>
+    columns > 0
+      ? columns.toString()
+      : t("general.liveDashboard.gridColumns.auto");
 
   const noVideoWarningLabel = (seconds: number) =>
     seconds > 0
@@ -491,6 +502,43 @@ export default function UiSettingsView() {
               {liveDashboardSwitchRows.map((row) => (
                 <SwitchSettingRow key={row.id} {...row} />
               ))}
+
+              {/* phones use their own list and grid toggle */}
+              {!isMobileOnly && (
+                <ValueSettingRow
+                  id="live-grid-columns"
+                  label={t("general.liveDashboard.gridColumns.label")}
+                  description={t("general.liveDashboard.gridColumns.desc")}
+                  control={
+                    <Select
+                      value={(gridColumns ?? 0).toString()}
+                      onValueChange={(value) =>
+                        setGridColumns(parseInt(value, 10))
+                      }
+                    >
+                      <SelectTrigger
+                        id="live-grid-columns"
+                        className="w-full md:w-36"
+                      >
+                        {gridColumnsLabel(gridColumns ?? 0)}
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {GRID_COLUMNS.map((columns) => (
+                            <SelectItem
+                              key={columns}
+                              className="cursor-pointer"
+                              value={columns.toString()}
+                            >
+                              {gridColumnsLabel(columns)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  }
+                />
+              )}
 
               <ValueSettingRow
                 id="live-video-fit"
