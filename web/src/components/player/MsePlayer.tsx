@@ -939,7 +939,11 @@ function MSEPlayer({
             // too many mse errors, try jsmpeg
             handleError("startup", `Max error count ${errorCount} exceeded.`);
           } else {
-            reconnect(5000);
+            // onDisconnect marks the close as intentional, which would
+            // cancel the reconnect. go2rtc can start a viewer on a keyframe
+            // it only caught the end of, and a new connection starts clean
+            intentionalDisconnectRef.current = false;
+            reconnect(0);
           }
         }
       }}
