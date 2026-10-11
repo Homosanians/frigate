@@ -67,6 +67,12 @@ export const TRANSFER_KEYS: TransferKey[] = [
     schema: z.enum(["contain", "fill", "cover"]),
   },
   {
+    key: "liveGridColumns",
+    section: "preferences",
+    namespaced: true,
+    schema: z.number().int().min(0).max(6),
+  },
+  {
     key: "naturalAspectLayout",
     section: "preferences",
     namespaced: true,

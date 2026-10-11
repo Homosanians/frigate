@@ -59,6 +59,15 @@ import { BsFillCameraVideoOffFill } from "react-icons/bs";
 import { AuthContext } from "@/context/auth-context";
 import { useIsAdmin } from "@/hooks/use-is-admin";
 
+// literal class names, so Tailwind keeps them in the build
+const GRID_COLUMN_CLASSES: { [columns: number]: string } = {
+  2: "grid-cols-2",
+  3: "grid-cols-3",
+  4: "grid-cols-4",
+  5: "grid-cols-5",
+  6: "grid-cols-6",
+};
+
 type LiveDashboardViewProps = {
   cameras: CameraConfig[];
   cameraGroup: string;
@@ -232,6 +241,12 @@ export default function LiveDashboardView({
     "liveVideoFit",
     "contain",
   );
+  const [gridColumns] = useUserPersistence("liveGridColumns", 0);
+  // unset means the count follows the window's width, and phones keep their
+  // list and grid toggle
+  const gridColumnsClass =
+    (!isMobileOnly && GRID_COLUMN_CLASSES[gridColumns ?? 0]) ||
+    "grid-cols-2 xl:grid-cols-3 3xl:grid-cols-4";
 
   const { allGroupsStreamingSettings, setAllGroupsStreamingSettings } =
     useStreamingSettings();
@@ -521,8 +536,7 @@ export default function LiveDashboardView({
                 className={cn(
                   "grid grid-cols-1",
                   seamlessTiles ? "gap-0 px-0" : "mt-2 gap-2 px-2 md:gap-4",
-                  mobileLayout == "grid" &&
-                    "grid-cols-2 xl:grid-cols-3 3xl:grid-cols-4",
+                  mobileLayout == "grid" && gridColumnsClass,
                   isMobile && "px-0",
                 )}
               >
