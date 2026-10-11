@@ -494,7 +494,10 @@ export default function LiveDashboardView({
       ) : (
         <>
           {!fullscreen && events && events.length > 0 && (
-            <ScrollArea className={cn(seamlessTiles && "mb-2")}>
+            <ScrollArea
+              // seamless tiles drop the page padding, which the strip keeps
+              className={cn(seamlessTiles && "mb-2 md:px-2 md:pt-2")}
+            >
               <TooltipProvider>
                 <div className="flex items-center gap-2 px-1">
                   {events.map((event) => {

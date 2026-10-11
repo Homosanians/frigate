@@ -125,6 +125,47 @@ function pictureFit(frigateApp: FrigateApp, camera: string) {
   }, camera);
 }
 
+// an unreviewed alert from the last hour, which the dashboard lists above the tiles
+function recentAlert() {
+  const now = Date.now() / 1000;
+  return {
+    id: "review-alert-recent",
+    camera: "front_door",
+    start_time: now - 120,
+    end_time: now - 90,
+    has_been_reviewed: false,
+    severity: "alert",
+    thumb_path: "/clips/front_door/review-alert-recent-thumb.jpg",
+    data: {
+      audio: [],
+      detections: ["person-abc123"],
+      objects: ["person"],
+      sub_labels: [],
+      significant_motion_areas: [],
+      zones: [],
+    },
+  };
+}
+
+// where the first alert card sits, and how far the tiles start below it
+function reviewStripBox(frigateApp: FrigateApp) {
+  return frigateApp.page.evaluate(() => {
+    const card = document.querySelector(
+      "button[aria-label='Mark as Reviewed']",
+    )?.parentElement;
+    const tile = document.querySelector("[data-camera='front_door']");
+    if (!card || !tile) {
+      return null;
+    }
+    const c = card.getBoundingClientRect();
+    return {
+      x: Math.round(c.x),
+      y: Math.round(c.y),
+      gapToTiles: Math.round(tile.getBoundingClientRect().y - c.bottom),
+    };
+  });
+}
+
 function cornerRadii(frigateApp: FrigateApp, camera: string) {
   return frigateApp.page.evaluate((cam) => {
     const card = document.querySelector(`[data-camera='${cam}']`);
@@ -203,6 +244,24 @@ test.describe("Live tile display @high", () => {
     expect(second.x - (first.x + first.w)).toBeCloseTo(0, 0);
     expect(second.y).toBeCloseTo(first.y, 0);
     expect((await cornerRadii(frigateApp, "front_door")).card).toBe("0px");
+  });
+
+  test("seamless tiles leave the review strip where it was @mobile", async ({
+    frigateApp,
+  }) => {
+    await frigateApp.installDefaults({ reviews: [recentAlert()] });
+    await frigateApp.goto("/");
+    await expect
+      .poll(() => reviewStripBox(frigateApp), { timeout: 10_000 })
+      .not.toBeNull();
+    const before = await reviewStripBox(frigateApp);
+
+    await seedLayout(frigateApp.page, "seamlessLiveTiles:admin", true);
+    await frigateApp.page.reload();
+
+    await expect
+      .poll(() => reviewStripBox(frigateApp), { timeout: 10_000 })
+      .toEqual(before);
   });
 
   test("a mismatched still letterboxes by default", async ({ frigateApp }) => {
