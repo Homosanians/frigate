@@ -7,9 +7,10 @@ type NoVideoBadgeProps = {
   timeout: number;
   // when Frigate stopped receiving the camera's frames, if it has
   videoLossSince?: number;
-  // whether the tile should be drawing live frames, and when it last drew one
+  // whether the tile should be showing live video, and when it last showed a
+  // new picture (0 until it has shown one)
   expectLive: boolean;
-  lastFrameRef: MutableRefObject<number>;
+  lastPictureRef: MutableRefObject<number>;
   compact?: boolean;
 };
 
@@ -17,13 +18,13 @@ export function NoVideoBadge({
   timeout,
   videoLossSince,
   expectLive,
-  lastFrameRef,
+  lastPictureRef,
   compact = false,
 }: NoVideoBadgeProps) {
   const { t } = useTranslation(["components/player"]);
   const [elapsed, setElapsed] = useState<number>();
 
-  // a tile that starts going live has until the timeout to draw a frame
+  // an idle tile's last still can be old, so going live starts the count over
   const liveSince = useRef(0);
   useEffect(() => {
     if (expectLive) {
@@ -40,11 +41,12 @@ export function NoVideoBadge({
     }
 
     const update = () => {
+      // a tile that has not shown a picture yet is still connecting, and
+      // has nothing to go stale
+      const stale = expectLive && lastPictureRef.current > 0;
       const since = Math.min(
         videoLossSince ?? Infinity,
-        expectLive
-          ? Math.max(lastFrameRef.current, liveSince.current)
-          : Infinity,
+        stale ? Math.max(lastPictureRef.current, liveSince.current) : Infinity,
       );
       setElapsed(Date.now() - since);
     };
@@ -52,7 +54,7 @@ export function NoVideoBadge({
     update();
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
-  }, [watching, expectLive, videoLossSince, lastFrameRef]);
+  }, [watching, expectLive, videoLossSince, lastPictureRef]);
 
   if (elapsed === undefined || elapsed < timeout * 1000) {
     return null;

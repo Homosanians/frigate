@@ -60,9 +60,8 @@ async function installFourByThreeGarage(frigateApp: FrigateApp) {
   );
 }
 
-// garage goes live over MSE, and go2rtc accepts the stream then sends nothing
-async function installSilentLiveGarage(frigateApp: FrigateApp) {
-  await installFourByThreeGarage(frigateApp);
+// go2rtc accepts an MSE stream and then sends nothing
+async function installSilentMse(frigateApp: FrigateApp) {
   await frigateApp.page.routeWebSocket("**/live/mse/api/ws**", (ws) => {
     ws.onMessage((message) => {
       if (JSON.parse(message.toString()).type === "mse") {
@@ -75,6 +74,36 @@ async function installSilentLiveGarage(frigateApp: FrigateApp) {
       }
     });
   });
+}
+
+// garage goes live over MSE, which never plays
+async function installSilentLiveGarage(frigateApp: FrigateApp) {
+  await installFourByThreeGarage(frigateApp);
+  await installSilentMse(frigateApp);
+}
+
+// garage's stills arrive until the returned function is called, then hang
+async function installStoppableStills(frigateApp: FrigateApp) {
+  let arriving = true;
+  await frigateApp.page.route("**/api/garage/latest.webp*", (route) => {
+    if (arriving) {
+      return route.fulfill({ contentType: "image/png", body: STILL_4_3 });
+    }
+  });
+  return () => {
+    arriving = false;
+  };
+}
+
+// resolves once the page has run for the given time past the mark
+async function pageRunsFor(frigateApp: FrigateApp, ms: number) {
+  const start = await frigateApp.page.evaluate(() => performance.now());
+  await expect
+    .poll(
+      () => frigateApp.page.evaluate((mark) => performance.now() - mark, start),
+      { timeout: ms + 10_000 },
+    )
+    .toBeGreaterThan(ms);
 }
 
 function pictureFit(frigateApp: FrigateApp, camera: string) {
@@ -249,22 +278,84 @@ test.describe("No-video badge @high", () => {
     await expect(card.getByText("No video")).toHaveCount(0);
   });
 
-  test("a live tile that draws no frames shows the badge", async ({
+  test("a tile whose picture stops updating shows the badge", async ({
     frigateApp,
   }) => {
     test.skip(frigateApp.isMobile, "garage sits below the fold on phones");
 
     await installSilentLiveGarage(frigateApp);
+    // the stream never plays, and once the tile goes live its stills stop
+    // arriving too, so nothing on the tile changes any more
+    const stopStills = await installStoppableStills(frigateApp);
     await openWithPreference(frigateApp, "/", "noVideoWarning", 5);
     const badge = new LivePage(frigateApp.page, true)
       .cameraCard("garage")
       .getByText("No video");
 
+    stopStills();
     frigateApp.ws.send("garage/motion", "ON");
 
     await expect(badge).toBeVisible({ timeout: 15_000 });
-    // counted from when the tile went live, not from an earlier frame
+    // counted from when the tile went live, not from an earlier picture
     await expect(badge.locator("..").getByText(/^0:0\d$/)).toBeVisible();
+  });
+
+  test("a stream that is slow to start shows no badge while stills refresh", async ({
+    frigateApp,
+  }) => {
+    test.skip(frigateApp.isMobile, "garage sits below the fold on phones");
+
+    // waiting on a keyframe can take longer than the warning; the tile keeps
+    // showing fresh stills meanwhile, so its picture is not stale
+    await installSilentLiveGarage(frigateApp);
+    await openWithPreference(frigateApp, "/", "noVideoWarning", 5);
+    const card = new LivePage(frigateApp.page, true).cameraCard("garage");
+
+    frigateApp.ws.send("garage/motion", "ON");
+    await expect(card.locator(".animate-pulse")).toBeVisible();
+
+    await pageRunsFor(frigateApp, 8_000);
+    await expect(card.getByText("No video")).toHaveCount(0);
+  });
+
+  test("a continuous stream that has not started yet shows no badge", async ({
+    frigateApp,
+  }) => {
+    test.skip(frigateApp.isMobile, "Draggable grid is desktop-only");
+
+    // continuous streaming shows a spinner instead of stills, so a tile that
+    // is still connecting has had no picture to go stale
+    await frigateApp.installDefaults({
+      config: {
+        go2rtc: { streams: { front_door: ["rtsp://127.0.0.1:8554/front"] } },
+      },
+    });
+    await frigateApp.page.route("**/api/go2rtc/streams/**", (route) =>
+      route.fulfill({
+        json: { producers: [{ medias: ["video, recvonly, H264"] }] },
+      }),
+    );
+    await installSilentMse(frigateApp);
+    await frigateApp.goto("/?group=outdoor");
+    const card = new LivePage(frigateApp.page, true).cameraCard("front_door");
+    await expect(card.first()).toBeVisible({ timeout: 10_000 });
+    await seedLayout(frigateApp.page, "noVideoWarning:admin", 5);
+    await seedLayout(frigateApp.page, "streaming-settings:admin", {
+      outdoor: {
+        front_door: {
+          streamName: "front_door",
+          streamType: "continuous",
+          compatibilityMode: false,
+          playAudio: false,
+          volume: 1,
+        },
+      },
+    });
+    await frigateApp.page.reload();
+    await expect(card.locator("video")).toBeAttached({ timeout: 10_000 });
+
+    await pageRunsFor(frigateApp, 8_000);
+    await expect(card.getByText("No video")).toHaveCount(0);
   });
 
   test("a live tile that keeps decoding frames shows no badge", async ({
@@ -282,23 +373,16 @@ test.describe("No-video badge @high", () => {
         }) as VideoPlaybackQuality;
     });
     await installSilentLiveGarage(frigateApp);
+    // without stills, decoded frames are the tile's only sign of life
+    const stopStills = await installStoppableStills(frigateApp);
     await openWithPreference(frigateApp, "/", "noVideoWarning", 5);
     const card = new LivePage(frigateApp.page, true).cameraCard("garage");
 
+    stopStills();
     frigateApp.ws.send("garage/motion", "ON");
     await expect(card.locator(".animate-pulse")).toBeVisible();
-    const liveAt = await frigateApp.page.evaluate(() => performance.now());
 
-    await expect
-      .poll(
-        () =>
-          frigateApp.page.evaluate(
-            (start) => performance.now() - start,
-            liveAt,
-          ),
-        { timeout: 15_000 },
-      )
-      .toBeGreaterThan(8_000);
+    await pageRunsFor(frigateApp, 8_000);
     await expect(card.getByText("No video")).toHaveCount(0);
   });
 });

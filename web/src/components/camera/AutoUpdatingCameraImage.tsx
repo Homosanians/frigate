@@ -12,6 +12,7 @@ type AutoUpdatingCameraImageProps = {
   periodicCache?: boolean;
   rounded?: boolean;
   fit?: LiveVideoFit;
+  onLoad?: () => void;
 };
 
 const MIN_LOAD_TIMEOUT_MS = 200;
@@ -26,6 +27,7 @@ export default function AutoUpdatingCameraImage({
   periodicCache = false,
   rounded = true,
   fit = "contain",
+  onLoad,
 }: AutoUpdatingCameraImageProps) {
   const [key, setKey] = useState(Date.now());
   const [fps, setFps] = useState<string>("0");
@@ -48,6 +50,7 @@ export default function AutoUpdatingCameraImage({
 
   const handleLoad = useCallback(() => {
     setIsCached(true);
+    onLoad?.();
 
     if (reloadInterval == -1) {
       return;

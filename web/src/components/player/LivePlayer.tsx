@@ -285,14 +285,6 @@ export default function LivePlayer({
     }
   }, [cameraConfig.name, cameraConfig.onvif.host]);
 
-  // no-video watchdog: frames land in a ref so they never re-render the tile
-
-  const lastFrameRef = useRef(0);
-  const handleFrame = useCallback(() => {
-    lastFrameRef.current = Date.now();
-  }, []);
-  const onFrame = noVideoWarning > 0 ? handleFrame : undefined;
-
   // enabled states
 
   const [isReEnabling, setIsReEnabling] = useState(false);
@@ -320,6 +312,31 @@ export default function LivePlayer({
       setIsReEnabling(false);
     }
   }, [liveReady, isReEnabling]);
+
+  // no-video watchdog: when the tile last showed a new picture, which is a
+  // live frame or, while the still is what's on screen, a freshly loaded
+  // still. A stream that is slow to start keeps refreshing its still, so it
+  // is not mistaken for a stalled one. Kept in a ref so pictures never
+  // re-render the tile.
+
+  const stillVisible =
+    showStillWithoutActivity && !liveReady && !isReEnabling && cameraEnabled;
+  const stillVisibleRef = useRef(stillVisible);
+
+  useEffect(() => {
+    stillVisibleRef.current = stillVisible;
+  }, [stillVisible]);
+
+  const lastPictureRef = useRef(0);
+  const handleFrame = useCallback(() => {
+    lastPictureRef.current = Date.now();
+  }, []);
+  const handleStillLoad = useCallback(() => {
+    if (stillVisibleRef.current) {
+      lastPictureRef.current = Date.now();
+    }
+  }, []);
+  const onFrame = noVideoWarning > 0 ? handleFrame : undefined;
 
   if (!cameraConfig) {
     return <ActivityIndicator />;
@@ -535,12 +552,7 @@ export default function LivePlayer({
       <div
         className={cn(
           "absolute inset-0 w-full",
-          showStillWithoutActivity &&
-            !liveReady &&
-            !isReEnabling &&
-            cameraEnabled
-            ? "visible"
-            : "invisible",
+          stillVisible ? "visible" : "invisible",
         )}
       >
         <AutoUpdatingCameraImage
@@ -552,6 +564,7 @@ export default function LivePlayer({
           periodicCache
           rounded={!seamless}
           fit={videoFit}
+          onLoad={handleStillLoad}
         />
       </div>
 
@@ -642,7 +655,7 @@ export default function LivePlayer({
           timeout={noVideoWarning}
           videoLossSince={videoLossSince}
           expectLive={autoLive && !!streamName && cameraActive && windowVisible}
-          lastFrameRef={lastFrameRef}
+          lastPictureRef={lastPictureRef}
           compact={isCompact}
         />
       )}
