@@ -603,3 +603,45 @@ jobs:
           sources: |
             ghcr.io/${{ steps.lowercaseRepo.outputs.lowercase }}:${{ env.SHORT_SHA }}-amd64
             ghcr.io/${{ steps.lowercaseRepo.outputs.lowercase }}:${{ env.SHORT_SHA }}-rpi
+  # every image of the newest dev build is also published under the dev and
+  # latest aliases
+  tag_latest:
+    runs-on: ubuntu-22.04
+    name: Tag dev and latest
+    # a variant that failed to build keeps its previous latest image
+    if: ${{ !cancelled() && github.ref == 'refs/heads/dev' && needs.smoke_test.result == 'success' && needs.assemble_default_build.result == 'success' }}
+    needs:
+      - smoke_test
+      - assemble_default_build
+      - jetson_jp6_build
+      - amd64_extra_builds
+      - arm64_extra_builds
+      - synaptics_build
+    steps:
+      - id: lowercaseRepo
+        uses: ASzc/change-string-case-action@v6
+        with:
+          string: ${{ github.repository }}
+      - name: Log in to the Container registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag and push the dev and latest images
+        env:
+          BASE: ghcr.io/${{ steps.lowercaseRepo.outputs.lowercase }}
+        run: |
+          BUILD_TAG=${BASE}:${GITHUB_SHA::7}
+          copy() {
+            docker run --rm -v $HOME/.docker/config.json:/config.json quay.io/skopeo/stable:latest copy --authfile /config.json --multi-arch all docker://$1 docker://$2
+          }
+
+          for alias in dev latest; do
+            ALIAS_TAG=${BASE}:${alias}
+            copy ${BUILD_TAG} ${ALIAS_TAG}
+            copy ${BUILD_TAG}-amd64 ${ALIAS_TAG}-amd64
+            for variant in standard-arm64 rpi tensorrt tensorrt-jp6 rocm rk synaptics; do
+              copy ${BUILD_TAG}-${variant} ${ALIAS_TAG}-${variant} || echo "::warning::No ${variant} image in this build, its ${alias} tag was left as it is"
+            done
+          done
