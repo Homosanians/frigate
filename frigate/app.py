@@ -57,6 +57,7 @@ from frigate.events.cleanup import EventCleanup
 from frigate.events.maintainer import EventProcessor
 from frigate.jobs.export import reap_stale_exports
 from frigate.jobs.motion_search import stop_all_motion_search_jobs
+from frigate.live_cache.process import LiveCacheProcess, cached_streams
 from frigate.log import _stop_logging
 from frigate.models import (
     Event,
@@ -470,6 +471,14 @@ class FrigateApp:
         output_processor.start()
         logger.info(f"Output process started: {output_processor.pid}")
 
+    def start_live_cache(self) -> None:
+        if not cached_streams(self.config):
+            return
+
+        self.live_cache_process = LiveCacheProcess(self.config, self.stop_event)
+        self.live_cache_process.start()
+        logger.info(f"Live cache process started: {self.live_cache_process.pid}")
+
     def start_camera_processor(self) -> None:
         self.camera_maintainer = CameraMaintainer(
             self.config,
@@ -556,6 +565,11 @@ class FrigateApp:
                 "output_processor",
                 "output",
                 lambda: OutputProcess(self.config, self.stop_event),
+            ),
+            (
+                "live_cache_process",
+                "live_cache",
+                lambda: LiveCacheProcess(self.config, self.stop_event),
             ),
             (
                 "audio_process",
@@ -675,6 +689,7 @@ class FrigateApp:
 
         self.init_embeddings_client()
         self.start_video_output_processor()
+        self.start_live_cache()
         self.start_ptz_autotracker()
         self.start_detected_frames_processor()
         self.start_camera_processor()

@@ -4,17 +4,17 @@ const live: SectionConfigOverrides = {
   base: {
     sectionDocs: "/configuration/live",
     restartRequired: [],
-    fieldOrder: ["streams", "transcode", "height", "quality"],
+    fieldOrder: ["streams", "transcode", "cache", "height", "quality"],
     fieldGroups: {},
     hiddenFields: ["enabled_in_config"],
     advancedFields: ["height", "quality"],
   },
   global: {
-    restartRequired: ["streams", "height", "quality"],
+    restartRequired: ["streams", "cache", "height", "quality"],
     hiddenFields: ["streams", "transcode"],
   },
   camera: {
-    restartRequired: ["height", "quality"],
+    restartRequired: ["cache", "height", "quality"],
     orderedMaps: ["streams"],
     uiSchema: {
       streams: {

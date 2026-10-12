@@ -918,6 +918,12 @@ live:
         bitrate: 500
       - height: 360
         bitrate: 250
+  # Optional: Keep the frames since the last keyframe of each live stream in memory,
+  # so MSE live view starts at once instead of waiting for the next keyframe.
+  # NOTE: Can be overridden at the camera level. Changing it requires a restart.
+  cache:
+    # Optional: Enable the live stream cache (default: shown below)
+    enabled: False
   # Optional: Set the height of the jsmpeg stream. (default: 720)
   # This must be less than or equal to the height of the detect stream. Lower resolutions
   # reduce bandwidth required for viewing the jsmpeg stream. Width is computed to match known aspect ratio.

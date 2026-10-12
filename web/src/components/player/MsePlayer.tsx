@@ -7,6 +7,7 @@ import {
   PlayerStatsType,
   VideoResolutionType,
 } from "@/types/live";
+import { MSE_CODECS, supportedMseCodecs } from "@/utils/mseUtil";
 import {
   SetStateAction,
   useCallback,
@@ -17,8 +18,23 @@ import {
 } from "react";
 import { isIOS, isSafari } from "react-device-detect";
 
+// how far behind the newest frame playback starts after loading cached frames
+const LIVE_EDGE_MARGIN = 0.5;
+// when the live cache last failed for a stream. the stream plays straight
+// from go2rtc for a while, then the cache is tried again, so a restart of
+// Frigate does not turn it off in a tab that stays open
+const LIVE_CACHE_RETRY_MS = 60000;
+const liveCacheFailures = new Map<string, number>();
+
+function liveCacheFailed(stream: string) {
+  const at = liveCacheFailures.get(stream);
+  return at !== undefined && Date.now() - at < LIVE_CACHE_RETRY_MS;
+}
+
 type MSEPlayerProps = {
   camera: string;
+  // play through the live cache, which starts with the frames since the last keyframe
+  cached?: boolean;
   className?: string;
   playbackEnabled?: boolean;
   audioEnabled?: boolean;
@@ -36,6 +52,7 @@ type MSEPlayerProps = {
 
 function MSEPlayer({
   camera,
+  cached = false,
   className,
   playbackEnabled = true,
   audioEnabled = false,
@@ -52,17 +69,6 @@ function MSEPlayer({
 }: MSEPlayerProps) {
   const RECONNECT_TIMEOUT: number = 10000;
   const BUFFERING_COOLDOWN_TIMEOUT: number = 5000;
-
-  const CODECS: string[] = [
-    "avc1.640029", // H.264 high 4.1 (Chromecast 1st and 2nd Gen)
-    "avc1.64002A", // H.264 high 4.2 (Chromecast 3rd Gen)
-    "avc1.640033", // H.264 high 5.1 (Chromecast with Google TV)
-    "hvc1.1.6.L153.B0", // H.265 main 5.1 (Chromecast Ultra)
-    "mp4a.40.2", // AAC LC
-    "mp4a.40.5", // AAC HE
-    "flac", // FLAC (PCM compatible)
-    "opus", // OPUS Chrome, Firefox
-  ];
 
   const visibilityCheck: boolean = !pip;
   const [isPlaying, setIsPlaying] = useState(false);
@@ -99,8 +105,31 @@ function MSEPlayer({
   const mseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mseResponseReceivedRef = useRef<boolean>(false);
 
+  const [viaCache, setViaCache] = useState(cached && !liveCacheFailed(camera));
+  const viaCacheRef = useRef(viaCache);
+  // cached frames are loading and the jump to their end is still to come
+  const catchingUpRef = useRef(false);
+  const liveEdgeRef = useRef(false);
+  // whether anything arrived on the current socket
+  const receivedRef = useRef(false);
+  // tells the health sampler that the buffer jumped rather than filled
+  const healthResetRef = useRef(false);
+
+  useEffect(() => {
+    viaCacheRef.current = viaCache;
+  }, [viaCache]);
+
   const wsURL = useMemo(() => {
-    return `${baseUrl.replace(/^http/, "ws")}live/mse/api/ws?src=${camera}`;
+    const path = viaCache ? "live/cache/ws" : "live/mse/api/ws";
+    return `${baseUrl.replace(/^http/, "ws")}${path}?src=${camera}`;
+  }, [camera, viaCache]);
+
+  // the live cache is optional, so a stream it cannot serve plays from go2rtc
+  const leaveCache = useCallback(() => {
+    liveCacheFailures.set(camera, Date.now());
+    catchingUpRef.current = false;
+    liveEdgeRef.current = false;
+    setViaCache(false);
   }, [camera]);
 
   // socket handlers are bound once per connection, so they reach the
@@ -123,12 +152,10 @@ function MSEPlayer({
           `${camera} - Browser negotiated codecs: ${mseCodecRef.current}`,
         );
         // eslint-disable-next-line no-console
-        console.error(`${camera} - Supported codecs: ${CODECS.join(", ")}`);
+        console.error(`${camera} - Supported codecs: ${MSE_CODECS.join(", ")}`);
       }
       onErrorRef.current?.(error);
     },
-    // we know that these deps are correct
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [camera],
   );
 
@@ -161,15 +188,6 @@ function MSEPlayer({
     [wsRef],
   );
 
-  const codecs = useCallback((isSupported: (type: string) => boolean) => {
-    return CODECS.filter((codec) =>
-      isSupported(`video/mp4; codecs="${codec}"`),
-    ).join();
-
-    // we know that these deps are correct
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const onConnect = useCallback(() => {
     if (!videoRef.current?.isConnected || !wsURL || wsRef.current) {
       return false;
@@ -180,6 +198,7 @@ function MSEPlayer({
 
     setConnectTS(Date.now());
 
+    receivedRef.current = false;
     wsRef.current = new WebSocket(wsURL);
     wsRef.current.binaryType = "arraybuffer";
     wsRef.current.addEventListener("open", onOpen);
@@ -261,8 +280,12 @@ function MSEPlayer({
     }
 
     setWsState(WebSocket.OPEN);
+    catchingUpRef.current = viaCacheRef.current;
+    liveEdgeRef.current = false;
 
     wsRef.current?.addEventListener("message", (ev) => {
+      receivedRef.current = true;
+
       if (typeof ev.data === "string") {
         const msg = JSON.parse(ev.data);
         for (const mode in onmessageRef.current) {
@@ -317,11 +340,17 @@ function MSEPlayer({
       return;
     }
 
+    // nothing came through, so the live cache is down or refused the stream
+    if (viaCacheRef.current && !receivedRef.current) {
+      leaveCache();
+      return;
+    }
+
     if (wsState === WebSocket.CLOSED) return;
     reconnect();
     // reconnect is defined below and stable
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsState]);
+  }, [wsState, leaveCache]);
 
   const sendWithTimeout = (value: object, timeout: number) => {
     return new Promise<void>((resolve, reject) => {
@@ -385,22 +414,53 @@ function MSEPlayer({
     });
   };
 
+  // the live cache sends the frames since the last keyframe in one burst.
+  // they are only there to decode from, so playback starts near their end
+  const seekToLiveEdge = () => {
+    const video = videoRef.current;
+
+    // appends still in flight would move the end
+    if (!liveEdgeRef.current || !video || appendingRef.current) {
+      return;
+    }
+
+    if (video.buffered.length === 0) {
+      return;
+    }
+
+    const end = video.buffered.end(video.buffered.length - 1);
+    const target = Math.max(video.buffered.start(0), end - LIVE_EDGE_MARGIN);
+
+    if (video.currentTime < target) {
+      video.currentTime = target;
+    }
+
+    liveEdgeRef.current = false;
+    catchingUpRef.current = false;
+    healthResetRef.current = true;
+  };
+
   const onMse = () => {
     if ("ManagedMediaSource" in window) {
       // safari
-      const MediaSource = window.ManagedMediaSource;
-
       msRef.current?.addEventListener(
         "sourceopen",
         () => {
           sendWithTimeout(
             {
               type: "mse",
-              // @ts-expect-error for typing
-              value: codecs(MediaSource.isTypeSupported),
+              value: supportedMseCodecs(),
             },
             (fallbackTimeout ?? 3) * 1000,
           ).catch(() => {
+            // the close handler deals with a live cache that is not there
+            if (
+              viaCacheRef.current &&
+              wsRef.current?.readyState !== WebSocket.OPEN
+            ) {
+              return;
+            }
+
             if (wsRef.current) {
               onDisconnect();
             }
@@ -427,10 +487,18 @@ function MSEPlayer({
           sendWithTimeout(
             {
               type: "mse",
-              value: codecs(MediaSource.isTypeSupported),
+              value: supportedMseCodecs(),
             },
             (fallbackTimeout ?? 3) * 1000,
           ).catch(() => {
+            // the close handler deals with a live cache that is not there
+            if (
+              viaCacheRef.current &&
+              wsRef.current?.readyState !== WebSocket.OPEN
+            ) {
+              return;
+            }
+
             // Only report errors if we actually had a connection that failed
             // If WS wasn't connected, this is a stale sourceopen event from a previous connection
             if (wsRef.current) {
@@ -489,6 +557,7 @@ function MSEPlayer({
           }
 
           appendingRef.current = false;
+          seekToLiveEdge();
 
           if (sb.buffered && sb.buffered.length) {
             const end = sb.buffered.end(sb.buffered.length - 1) - 15;
@@ -503,7 +572,7 @@ function MSEPlayer({
         }
       });
 
-      const buf = new Uint8Array(2 * 1024 * 1024);
+      let buf = new Uint8Array(2 * 1024 * 1024);
       let bufLen = 0;
 
       ondataRef.current = (data) => {
@@ -512,6 +581,17 @@ function MSEPlayer({
 
         if (sb?.updating || bufLen > 0) {
           const b = new Uint8Array(data);
+
+          // the live cache sends seconds of frames at once, which can be
+          // more than fits
+          if (bufLen + b.byteLength > buf.length) {
+            const grown = new Uint8Array(
+              Math.max(buf.length * 2, bufLen + b.byteLength),
+            );
+            grown.set(buf.subarray(0, bufLen));
+            buf = grown;
+          }
+
           buf.set(b, bufLen);
           bufLen += b.byteLength;
           // console.debug("VideoRTC.buffer", b.byteLength, bufLen);
@@ -525,10 +605,27 @@ function MSEPlayer({
       };
     };
 
+    onmessageRef.current["live"] = (msg) => {
+      if (msg.type !== "live") return;
+
+      liveEdgeRef.current = true;
+      seekToLiveEdge();
+    };
+
     // go2rtc answers a codec it cannot provide with an error message
     // instead of a negotiation reply
     onmessageRef.current["error"] = (msg) => {
-      if (msg.type !== "error" || !msg.value?.includes("codecs not matched")) {
+      if (msg.type !== "error") {
+        return;
+      }
+
+      // go2rtc's own errors pass through the live cache unchanged
+      if (viaCacheRef.current && msg.value?.startsWith("live cache:")) {
+        leaveCache();
+        return;
+      }
+
+      if (!msg.value?.includes("codecs not matched")) {
         return;
       }
 
@@ -584,6 +681,11 @@ function MSEPlayer({
   };
 
   const onProgress = useCallback(() => {
+    // the checks below would read the cached frames as lag or as a stall
+    if (catchingUpRef.current) {
+      return;
+    }
+
     const bufferTime = getBufferedTime(videoRef.current);
 
     if (
@@ -699,7 +801,7 @@ function MSEPlayer({
     };
     // we know that these deps are correct
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playbackEnabled]);
+  }, [playbackEnabled, wsURL]);
 
   // check visibility
 
@@ -839,6 +941,18 @@ function MSEPlayer({
         return;
       }
       deferred = false;
+
+      // a jump to the end of cached frames is not media that arrived
+      if (healthResetRef.current) {
+        healthResetRef.current = false;
+        lastBufferedEnd =
+          video.buffered.length > 0
+            ? video.buffered.end(video.buffered.length - 1)
+            : 0;
+        healthBytes = bytesLoaded;
+        healthTimestamp = now;
+        return;
+      }
 
       // the buffered end tracks delivered media, so playback-rate
       // catch-up does not skew it

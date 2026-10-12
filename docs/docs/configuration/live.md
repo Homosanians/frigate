@@ -178,6 +178,23 @@ cameras:
 
 Each quality becomes a go2rtc stream named `<camera>_transcode_<height>p`. go2rtc picks a hardware encoder automatically and falls back to the CPU, which costs CPU for each transcode while it is being watched. Check go2rtc's `api/ffmpeg/hardware` page to see which encoder it found. Using a sub stream as the `source` lowers the cost.
 
+### Live stream cache
+
+A live stream can only start at a keyframe, so opening a camera normally waits for the camera's next one, which takes up to its I-frame interval. If nobody was watching the camera, go2rtc also has to connect to it first. The live stream cache removes both waits for MSE playback: Frigate keeps the frames since the last keyframe of each stream in memory and gives them to a new viewer at once, and the player jumps to the newest frame.
+
+```yaml
+live:
+  cache:
+    enabled: true
+```
+
+The option can also be set for single cameras, and changing it requires a restart.
+
+- While a Live dashboard is open and visible, Frigate keeps the stream that each camera's page would open connected, so it is already cached when you click. The connection is dropped about 30 seconds after the dashboard is closed or hidden. Cameras whose streams Frigate already reads through go2rtc are not affected; others send their stream to Frigate for as long as a dashboard is open.
+- A few megabytes of memory are used per cached stream. A stream that goes more than 10 seconds or 16 MB between keyframes, as "smart codec" modes can, is not cached until its next keyframe and starts as it does without the cache.
+- Only MSE playback uses the cache. WebRTC and jsmpeg are unchanged, and so are other clients of go2rtc such as the Home Assistant card. [Transcoded streams](#transcoded-streams) are not cached, because they only run while someone is watching.
+- If the cache cannot serve a stream, the player connects to go2rtc directly as before and tries the cache again after a minute.
+
 ### WebRTC extra configuration:
 
 WebRTC works by creating a TCP or UDP connection on port `8555`. However, it requires additional configuration:

@@ -50,6 +50,7 @@ import {
 } from "@/types/live";
 import { FaCompress, FaExpand } from "react-icons/fa";
 import useCameraLiveMode from "@/hooks/use-camera-live-mode";
+import { useLiveCacheWarmup } from "@/hooks/use-live-cache-warmup";
 import { useResizeObserver } from "@/hooks/resize-observer";
 import LiveContextMenu from "@/components/menu/LiveContextMenu";
 import { useStreamingSettings } from "@/context/streaming-settings-provider";
@@ -203,6 +204,8 @@ export default function LiveDashboardView({
       removeEventListener("visibilitychange", visibilityListener);
     };
   }, [visibilityListener]);
+
+  useLiveCacheWarmup(cameras);
 
   const [visibleCameras, setVisibleCameras] = useState<string[]>([]);
   const visibleCameraObserver = useRef<IntersectionObserver | null>(null);

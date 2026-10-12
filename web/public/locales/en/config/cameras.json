@@ -282,6 +282,14 @@
         }
       }
     },
+    "cache": {
+      "label": "Live stream cache",
+      "description": "Instant start for MSE live view from a cache of recent frames.",
+      "enabled": {
+        "label": "Enable live stream cache",
+        "description": "Keep the frames since the last keyframe of each live stream in memory, so MSE live view starts at once instead of waiting for the next keyframe."
+      }
+    },
     "height": {
       "label": "Live height",
       "description": "Height (pixels) to render the jsmpeg live stream in the Web UI; must be <= detect stream height."

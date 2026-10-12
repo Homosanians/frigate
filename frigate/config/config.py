@@ -1143,7 +1143,7 @@ class FrigateConfig(FrigateBaseModel):
                 "lpr": ["enabled", "expire_time", "min_area", "enhancement"],
                 "audio_transcription": ["enabled", "live_enabled"],
                 # transcode is camera-level only
-                "live": ["streams", "height", "quality"],
+                "live": ["streams", "cache", "height", "quality"],
             }
 
             for section in allowed_fields_map:

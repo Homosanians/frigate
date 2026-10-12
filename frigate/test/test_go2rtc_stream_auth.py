@@ -170,6 +170,38 @@ class TestDenyResponseForGo2rtcStream(unittest.TestCase):
     def test_missing_role_bypasses(self):
         self.assertIsNone(self._deny("http://host/live/mse/api/ws?src=back_door", None))
 
+    # --- live cache paths ---
+
+    def test_cache_stream_of_another_camera_is_denied(self):
+        self.assertEqual(
+            self._deny("http://host/live/cache/ws?src=back_door", "limited_user"), 403
+        )
+
+    def test_cache_stream_of_an_allowed_camera_passes(self):
+        self.assertIsNone(
+            self._deny("http://host/live/cache/ws?src=front_door_sub", "limited_user")
+        )
+
+    def test_cache_warm_request_naming_another_camera_is_denied(self):
+        self.assertEqual(
+            self._deny(
+                "http://host/live/cache/warm?src=front_door_sub&src=garage",
+                "limited_user",
+            ),
+            403,
+        )
+
+    def test_cache_warm_request_for_allowed_cameras_passes(self):
+        self.assertIsNone(
+            self._deny(
+                "http://host/live/cache/warm?src=front_door_sub&src=back_door",
+                "dual_user",
+            )
+        )
+
+    def test_cache_request_without_a_stream_is_denied(self):
+        self.assertEqual(self._deny("http://host/live/cache/ws", "limited_user"), 403)
+
 
 if __name__ == "__main__":
     unittest.main()

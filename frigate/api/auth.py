@@ -1229,15 +1229,18 @@ def _get_stream_owner_cameras(request: Request, stream_name: str) -> set[str]:
     return owner_cameras
 
 
-# nginx proxies these paths straight to go2rtc with authentication-only checks
-# (see auth_request.conf). Each names the desired stream via the `src` query
-# param, so the camera-level check must happen here in the `/auth` subrequest —
-# `require_go2rtc_stream_access` only guards the REST `/go2rtc/streams/{name}`
-# endpoint, not these proxied live-stream paths.
+# nginx proxies these paths straight to go2rtc, or to the live cache in front
+# of it, with authentication-only checks (see auth_request.conf). Each names
+# the desired stream via the `src` query param, so the camera-level check must
+# happen here in the `/auth` subrequest — `require_go2rtc_stream_access` only
+# guards the REST `/go2rtc/streams/{name}` endpoint, not these proxied
+# live-stream paths.
 GO2RTC_STREAM_PROXY_PATHS = frozenset(
     {
         "/live/mse/api/ws",
         "/live/webrtc/api/ws",
+        "/live/cache/ws",
+        "/live/cache/warm",
         "/api/go2rtc/webrtc",
     }
 )

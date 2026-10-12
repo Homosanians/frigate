@@ -4,7 +4,12 @@ from frigate.util.live_streams import DEFAULT_TRANSCODE_QUALITIES
 
 from ..base import FrigateBaseModel
 
-__all__ = ["CameraLiveConfig", "LiveTranscodeConfig", "LiveTranscodeQualityConfig"]
+__all__ = [
+    "CameraLiveConfig",
+    "LiveCacheConfig",
+    "LiveTranscodeConfig",
+    "LiveTranscodeQualityConfig",
+]
 
 
 class LiveTranscodeQualityConfig(FrigateBaseModel):
@@ -54,6 +59,14 @@ class LiveTranscodeConfig(FrigateBaseModel):
         return qualities
 
 
+class LiveCacheConfig(FrigateBaseModel):
+    enabled: bool = Field(
+        default=False,
+        title="Enable live stream cache",
+        description="Keep the frames since the last keyframe of each live stream in memory, so MSE live view starts at once instead of waiting for the next keyframe.",
+    )
+
+
 class CameraLiveConfig(FrigateBaseModel):
     streams: dict[str, str] = Field(
         default_factory=list,
@@ -64,6 +77,11 @@ class CameraLiveConfig(FrigateBaseModel):
         default_factory=LiveTranscodeConfig,
         title="Transcoded streams",
         description="Lower-quality live streams transcoded on demand by go2rtc.",
+    )
+    cache: LiveCacheConfig = Field(
+        default_factory=LiveCacheConfig,
+        title="Live stream cache",
+        description="Instant start for MSE live view from a cache of recent frames.",
     )
     height: int = Field(
         default=720,

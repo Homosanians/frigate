@@ -117,6 +117,7 @@ export interface CameraConfig {
     roles: string[];
   }[];
   live: {
+    cache: { enabled: boolean };
     height: number;
     quality: number;
     streams: { [key: string]: string };

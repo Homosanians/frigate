@@ -31,6 +31,7 @@ import { useCameraFriendlyName } from "@/hooks/use-camera-friendly-name";
 import { ImageShadowOverlay } from "../overlay/ImageShadowOverlay";
 import { getTranslatedLabel } from "@/utils/i18n";
 import { formatList } from "@/utils/stringUtil";
+import { isTranscodeStreamName } from "@/utils/liveTranscode";
 import { VIDEO_FIT_CLASS } from "@/utils/videoUtil";
 import { NoVideoBadge } from "./NoVideoBadge";
 
@@ -373,6 +374,10 @@ export default function LivePlayer({
             !liveReady && "hidden",
           )}
           camera={streamName}
+          cached={
+            cameraConfig.live.cache.enabled &&
+            !isTranscodeStreamName(cameraConfig.name, streamName)
+          }
           playbackEnabled={cameraActive || liveReady}
           audioEnabled={playAudio}
           volume={volume}
