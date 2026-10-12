@@ -20,7 +20,7 @@ class ImageSourceConfig(FrigateBaseModel):
         description="Stream that saved images (faces, license plates, classification crops, snapshots) are taken from. 'detect' uses the detect stream, 'main' replaces them with a frame from the main stream when one can be fetched, 'auto' only does so when that frame is larger than the detect stream.",
     )
     match_threshold: float = Field(
-        default=0.9,
+        default=0.8,
         title="Match threshold",
         description="The main and detect streams are not in sync, so the main stream is searched for the frame that shows the same moment as the detect image. This is the minimum similarity (normalized correlation, 0 to 1) a main stream frame needs to be used. Higher values keep the detect image more often, lower values risk saving a frame from a different moment.",
         ge=0.0,

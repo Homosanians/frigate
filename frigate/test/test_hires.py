@@ -25,6 +25,7 @@ from frigate.data_processing.common.hires import (
     find_synced_frame,
     find_synced_offset,
     go2rtc_stream_name,
+    image_may_be_replaced,
     match_score,
     reference_from_bgr,
     reference_from_yuv,
@@ -34,6 +35,7 @@ from frigate.data_processing.common.license_plate.mixin import (
     MAX_EXPIRED_PLATES,
     LicensePlateProcessingMixin,
 )
+from frigate.data_processing.real_time import face
 from frigate.data_processing.real_time.face import FaceRealTimeProcessor
 from frigate.models import Recordings
 
@@ -272,17 +274,17 @@ class TestConfig(unittest.TestCase):
     def test_search_defaults(self):
         image_source = build_config().cameras["back"].image_source
 
-        assert image_source.match_threshold == 0.9
+        assert image_source.match_threshold == 0.8
         assert image_source.search_before == 4.0
         assert image_source.search_after == 4.0
 
     def test_search_settings_are_validated(self):
         image_source = (
-            build_config(match_threshold=0.8, search_before=1.5, search_after=10)
+            build_config(match_threshold=0.6, search_before=1.5, search_after=10)
             .cameras["back"]
             .image_source
         )
-        assert image_source.match_threshold == 0.8
+        assert image_source.match_threshold == 0.6
         assert image_source.search_before == 1.5
         assert image_source.search_after == 10.0
 
@@ -507,6 +509,22 @@ class TestHiResUpgrader(unittest.TestCase):
         assert not upgrader.job_counts
 
 
+class TestReplaceWindow(unittest.TestCase):
+    def test_image_may_be_replaced_shortly_after_it_was_saved(self):
+        config = build_config()
+
+        with patch.object(hires.time, "time", return_value=2000.0):
+            assert image_may_be_replaced(config, "back", 1990.0)
+            assert not image_may_be_replaced(config, "back", 1000.0)
+            assert not image_may_be_replaced(config, "gone", 1990.0)
+            assert not image_may_be_replaced(
+                build_config(stream="detect"), "back", 1990.0
+            )
+
+    def test_every_face_attempt_of_an_object_can_wait(self):
+        assert hires.MAX_JOBS_PER_KEY >= face.MAX_FACE_ATTEMPTS
+
+
 class TestFaceAttemptUpgrade(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -559,6 +577,73 @@ class TestFaceAttemptUpgrade(unittest.TestCase):
         )
 
         assert not os.path.exists(self.file)
+
+
+class TestFaceAttemptWithoutLibrary(unittest.TestCase):
+    def setUp(self):
+        camera = SimpleNamespace(
+            face_recognition=SimpleNamespace(enabled=True, min_area=100),
+            detect=SimpleNamespace(height=480),
+        )
+        processor = FaceRealTimeProcessor.__new__(FaceRealTimeProcessor)
+        processor.config = SimpleNamespace(cameras={"back": camera})
+        processor.face_config = SimpleNamespace(
+            detection_threshold=0.7, unknown_score=0.8, recognition_threshold=0.9
+        )
+        processor.metrics = MagicMock()
+        processor.faces_per_second = MagicMock()
+        processor.inference_speed = MagicMock()
+        processor.requestor = MagicMock()
+        processor.sub_label_publisher = MagicMock()
+        processor.requires_face_detection = True
+        processor.face_detector = MagicMock(is_ready=True)
+        processor.face_detector.detect.return_value = DetectionResult(
+            face=(10, 10, 40, 50), landmarks=()
+        )
+        processor.recognizer = MagicMock(mean_embs={})
+        processor.hires = MagicMock()
+        processor.person_face_history = {}
+        processor.camera_current_people = {}
+        processor.write_face_attempt = MagicMock(return_value="/tmp/attempt.webp")
+        self.processor = processor
+        self.frame = np.full((720, 640), 127, np.uint8)
+        self.obj_data = {
+            "camera": "back",
+            "id": "obj",
+            "label": "person",
+            "box": (100, 100, 200, 300),
+            "frame_time": 1004.0,
+        }
+
+    def test_face_is_saved_as_unknown_without_a_result(self):
+        # an empty face library has nothing to compare the face against
+        self.processor.recognizer.classify.return_value = None
+        self.processor.process_frame(self.obj_data, self.frame)
+
+        saved = self.processor.write_face_attempt.call_args.args
+        assert saved[0].shape == (40, 30, 3)
+        assert saved[3:] == ("unknown", 0.0)
+
+        submitted = self.processor.hires.submit.call_args.args
+        assert submitted[:3] == ("back", 1004.0, "face:obj")
+        self.processor.sub_label_publisher.publish.assert_not_called()
+
+    def test_face_without_a_result_is_dropped_when_the_library_has_faces(self):
+        # the face could not be aligned
+        self.processor.recognizer.mean_embs = {"someone": np.zeros(128)}
+        self.processor.recognizer.classify.return_value = None
+        self.processor.process_frame(self.obj_data, self.frame)
+
+        self.processor.write_face_attempt.assert_not_called()
+        self.processor.hires.submit.assert_not_called()
+
+    def test_attempts_without_a_result_still_count_towards_the_limit(self):
+        self.processor.recognizer.classify.return_value = None
+
+        for _ in range(20):
+            self.processor.process_frame(self.obj_data, self.frame)
+
+        assert self.processor.write_face_attempt.call_count == 12
 
 
 class TestPlateUpgrade(unittest.TestCase):

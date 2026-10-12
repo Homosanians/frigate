@@ -951,7 +951,7 @@ image_source:
   #           a main stream frame needs to be used (default: shown below)
   #           Higher values keep the detect image more often, lower values risk
   #           saving a frame from a different moment.
-  match_threshold: 0.9
+  match_threshold: 0.8
   # Optional: Seconds before the detect frame time to search (default: shown below)
   #           Raise this if the recording runs ahead of the detect stream.
   search_before: 4.0

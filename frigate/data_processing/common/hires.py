@@ -29,8 +29,12 @@ logger = logging.getLogger(__name__)
 JOB_TIMEOUT = 120.0
 # delay before looking again for a recording that was not in the db yet
 RETRY_INTERVAL = 2.0
-# every upgrade spawns ffmpeg, so each consumer only keeps this many waiting
-MAX_JOBS_PER_KEY = 6
+# every upgrade spawns ffmpeg, so each consumer only keeps this many waiting.
+# an object gets up to 12 face attempts, which all wait for the same segment
+MAX_JOBS_PER_KEY = 12
+# how long after it was saved an image may still be replaced: the wait for its
+# recording plus the time to find and decode the frame
+REPLACE_WINDOW = JOB_TIMEOUT + 60.0
 MAX_FETCH_QUEUE = 32
 GO2RTC_TIMEOUT = 5
 # the detect stream is scaled and encoded separately from the main stream, so
@@ -60,6 +64,20 @@ class Reference:
     image: np.ndarray
     # where those pixels sit in the detect frame
     box: Box
+
+
+def image_may_be_replaced(config: FrigateConfig, camera: str, saved_at: float) -> bool:
+    """Whether an image saved at a time may still be swapped for a main stream one.
+
+    Until then it must not be cached for long, or the detect image sticks.
+    """
+    camera_config = config.cameras.get(camera)
+
+    return (
+        camera_config is not None
+        and camera_config.image_source.stream != ImageSourceStreamEnum.detect
+        and time.time() - saved_at < REPLACE_WINDOW
+    )
 
 
 def scale_box(box: Box | list[int], scale_x: float, scale_y: float) -> Box:

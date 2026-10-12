@@ -50,6 +50,7 @@ from frigate.const import (
     STREAM_TYPE_MAIN,
     STREAM_TYPE_SUB,
 )
+from frigate.data_processing.common.hires import image_may_be_replaced
 from frigate.models import Event, Previews, Recordings, Regions, ReviewSegment
 from frigate.output.preview import get_most_recent_preview_frame
 from frigate.ptz.onvif import OnvifRequestError, OnvifUnavailableError
@@ -1146,7 +1147,10 @@ async def event_snapshot(
         event = None
 
     if event is not None:
-        event_complete = True
+        # the snapshot is replaced from the main stream shortly after the end
+        event_complete = not image_may_be_replaced(
+            request.app.frigate_config, event.camera, event.end_time
+        )
 
         if not event.has_snapshot:
             return JSONResponse(
@@ -1488,7 +1492,10 @@ async def event_snapshot_clean(request: Request, event_id: str, download: bool =
     event_complete = False
     try:
         event = Event.get(Event.id == event_id)
-        event_complete = event.end_time is not None
+        # the snapshot is replaced from the main stream shortly after the end
+        event_complete = event.end_time is not None and not image_may_be_replaced(
+            request.app.frigate_config, event.camera, event.end_time
+        )
         await require_camera_access(event.camera, request=request)
         snapshot_config = request.app.frigate_config.cameras[event.camera].snapshots
         if not (snapshot_config.enabled and event.has_snapshot):

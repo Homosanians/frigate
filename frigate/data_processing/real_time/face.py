@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 MAX_FACES_ATTEMPTS_AFTER_REC = 6
+# kept within the main stream jobs one object may have waiting
 MAX_FACE_ATTEMPTS = 12
 
 # how far around the scaled face box the main stream frame is searched
@@ -232,15 +233,20 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
 
         res = self.recognizer.classify(face_frame)
 
-        if not res:
+        if res:
+            sub_label, score = res
+
+            if score <= self.face_config.unknown_score:
+                sub_label = "unknown"
+        elif self.face_detector.is_ready and not self.recognizer.mean_embs:
+            # an empty face library has nothing to compare the face against.
+            # the attempt is still saved so the library can be built from it
+            logger.debug(f"No faces in the library to compare {id} against")
+            sub_label, score = "unknown", 0.0
+        else:
             logger.debug(f"Face recognizer returned no result for {id}")
             self.__update_metrics(datetime.datetime.now().timestamp() - start)
             return
-
-        sub_label, score = res
-
-        if score <= self.face_config.unknown_score:
-            sub_label = "unknown"
 
         logger.debug(
             f"Detected best face for person as: {sub_label} with probability {score}"
