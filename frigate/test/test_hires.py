@@ -604,6 +604,8 @@ class TestFaceAttemptWithoutLibrary(unittest.TestCase):
         processor.hires = MagicMock()
         processor.person_face_history = {}
         processor.camera_current_people = {}
+        processor.hires_face_searches = {}
+        processor.expired_face_searches = {}
         processor.write_face_attempt = MagicMock(return_value="/tmp/attempt.webp")
         self.processor = processor
         self.frame = np.full((720, 640), 127, np.uint8)
@@ -614,6 +616,136 @@ class TestFaceAttemptWithoutLibrary(unittest.TestCase):
             "box": (100, 100, 200, 300),
             "frame_time": 1004.0,
         }
+
+    def _search(self, frame_time: float = 1004.0) -> None:
+        self.processor.face_detector.detect.return_value = None
+        self.processor.process_frame(
+            {**self.obj_data, "frame_time": frame_time}, self.frame
+        )
+
+    def _main_stream_frame(self) -> None:
+        # the handler of the last search, run with a 1920x1080 main stream frame
+        handler = self.processor.hires.submit.call_args.args[3]
+        handler(np.full((1080, 1920, 3), 127, np.uint8), 3.0, 2.25)
+
+    def test_main_stream_is_searched_when_detect_shows_no_face(self):
+        self._search()
+
+        submitted = self.processor.hires.submit.call_args.args
+        assert submitted[:3] == ("back", 1004.0, "face_search:obj")
+        assert submitted[4].box == (100, 100, 200, 300)
+        self.processor.write_face_attempt.assert_not_called()
+
+    def test_main_stream_searches_are_spaced_and_limited(self):
+        self._search(1004.0)
+        self._search(1004.5)
+        assert self.processor.hires.submit.call_count == 1
+
+        for index in range(1, 10):
+            self._search(1004.0 + index * face.HIRES_FACE_SEARCH_INTERVAL)
+
+        assert self.processor.hires.submit.call_count == face.MAX_HIRES_FACE_SEARCHES
+
+    def test_main_stream_is_not_searched_for_the_detect_stream(self):
+        self.processor.hires.enabled.return_value = False
+        self._search()
+
+        self.processor.hires.submit.assert_not_called()
+        assert self.processor.hires_face_searches == {}
+
+    def test_rejected_search_is_not_counted(self):
+        self.processor.hires.submit.return_value = False
+        self._search()
+
+        assert self.processor.hires_face_searches == {}
+
+    def test_face_from_the_main_stream_is_recognized(self):
+        self.processor.recognizer.mean_embs = {"someone": np.zeros(128)}
+        self.processor.recognizer.classify.return_value = ("someone", 0.95)
+        self.processor.face_config.min_faces = 1
+        self._search()
+        self.processor.face_detector.detect.return_value = DetectionResult(
+            face=(100, 50, 160, 130), landmarks=()
+        )
+        self._main_stream_frame()
+
+        # the person box scales to (300, 225, 600, 675) and is padded by a tenth
+        # of its size on each side
+        person = self.processor.face_detector.detect.call_args.args[0]
+        assert person.shape == (540, 360, 3)
+        saved = self.processor.write_face_attempt.call_args.args
+        assert saved[0].shape == (80, 60, 3)
+        assert saved[3:] == ("someone", 0.95)
+        assert self.processor.person_face_history["obj"] == [("someone", 0.95, 4800)]
+        # the saved crop already is the main stream one
+        assert self.processor.hires.submit.call_count == 1
+
+    def test_nothing_is_saved_without_a_face_in_the_main_stream(self):
+        self._search()
+        self._main_stream_frame()
+
+        self.processor.write_face_attempt.assert_not_called()
+        assert self.processor.person_face_history == {}
+
+    def test_small_main_stream_face_is_dropped(self):
+        self._search()
+        self.processor.face_detector.detect.return_value = DetectionResult(
+            face=(100, 50, 105, 56), landmarks=()
+        )
+        self._main_stream_frame()
+
+        self.processor.write_face_attempt.assert_not_called()
+
+    def test_person_who_left_is_still_recognized_from_the_main_stream(self):
+        self.processor.recognizer.mean_embs = {"someone": np.zeros(128)}
+        self.processor.recognizer.classify.return_value = ("someone", 0.95)
+        self.processor.face_config.min_faces = 1
+        self._search()
+        self.processor.expire_object("obj", "back")
+        self.processor.face_detector.detect.return_value = DetectionResult(
+            face=(100, 50, 160, 130), landmarks=()
+        )
+        self._main_stream_frame()
+
+        self.processor.write_face_attempt.assert_called_once()
+        assert self.processor.sub_label_publisher.publish.call_args.args[0][:2] == (
+            "obj",
+            "someone",
+        )
+        assert self.processor.camera_current_people == {}
+
+        # the history goes once no more main stream frames can arrive
+        with patch.object(face.time, "monotonic", return_value=1e9):
+            self.processor.expire_object("other", "back")
+
+        assert self.processor.person_face_history == {}
+        assert self.processor.expired_face_searches == {}
+
+    def test_late_main_stream_frame_does_not_recreate_the_history(self):
+        self.processor.recognizer.classify.return_value = None
+        self._search()
+        self.processor.expire_object("obj", "back")
+
+        with patch.object(face.time, "monotonic", return_value=1e9):
+            self.processor.expire_object("other", "back")
+
+        self.processor.face_detector.detect.return_value = DetectionResult(
+            face=(100, 50, 160, 130), landmarks=()
+        )
+        self._main_stream_frame()
+
+        self.processor.write_face_attempt.assert_called_once()
+        assert self.processor.person_face_history == {}
+
+    def test_person_without_searches_is_forgotten_when_they_leave(self):
+        self.processor.recognizer.classify.return_value = None
+        self.processor.process_frame(self.obj_data, self.frame)
+        assert "obj" in self.processor.person_face_history
+
+        self.processor.expire_object("obj", "back")
+
+        assert self.processor.person_face_history == {}
+        assert self.processor.camera_current_people == {"back": []}
 
     def test_face_is_saved_as_unknown_without_a_result(self):
         # an empty face library has nothing to compare the face against

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from typing import Any
 
 import cv2
@@ -26,6 +27,7 @@ from frigate.data_processing.common.face.recognizer import (
     FaceRecognizer,
 )
 from frigate.data_processing.common.hires import (
+    REPLACE_WINDOW,
     expand_box,
     reference_from_yuv,
     replace_image,
@@ -50,6 +52,14 @@ MAX_FACE_ATTEMPTS = 12
 # how far around the scaled face box the main stream frame is searched
 HIRES_FACE_SEARCH_PAD = 1.0
 
+# how many times the main stream is searched for the face of a person the
+# detect stream shows no face of. every search decodes a main stream frame
+MAX_HIRES_FACE_SEARCHES = 4
+# seconds between those searches, so they see the person in different poses
+HIRES_FACE_SEARCH_INTERVAL = 2.0
+# how far around the scaled person box the main stream frame is searched
+HIRES_PERSON_SEARCH_PAD = 0.2
+
 
 class FaceRealTimeProcessor(RealTimeProcessorApi):
     def __init__(
@@ -66,6 +76,10 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
         self.requires_face_detection = "face" not in self.config.objects.all_objects
         self.person_face_history: dict[str, list[tuple[str, float, int]]] = {}
         self.camera_current_people: dict[str, list[str]] = {}
+        # count and last frame time of the main stream searches of each person
+        self.hires_face_searches: dict[str, tuple[int, float]] = {}
+        # when people with main stream searches left, the frames arrive later
+        self.expired_face_searches: dict[str, float] = {}
         self.recognizer: FaceRecognizer
         self.faces_per_second = EventsPerSecond()
         self.inference_speed = InferenceSpeed(self.metrics.face_rec_speed)
@@ -165,6 +179,7 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
 
             if detection is None:
                 logger.debug("Detected no faces for person object.")
+                self.__search_main_stream(obj_data, frame)
                 return
 
             face_box = detection.face
@@ -231,30 +246,7 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
             logger.debug(f"Empty face crop for {id}")
             return
 
-        res = self.recognizer.classify(face_frame)
-
-        if res:
-            sub_label, score = res
-
-            if score <= self.face_config.unknown_score:
-                sub_label = "unknown"
-        elif self.face_detector.is_ready and not self.recognizer.mean_embs:
-            # an empty face library has nothing to compare the face against.
-            # the attempt is still saved so the library can be built from it
-            logger.debug(f"No faces in the library to compare {id} against")
-            sub_label, score = "unknown", 0.0
-        else:
-            logger.debug(f"Face recognizer returned no result for {id}")
-            self.__update_metrics(datetime.datetime.now().timestamp() - start)
-            return
-
-        logger.debug(
-            f"Detected best face for person as: {sub_label} with probability {score}"
-        )
-
-        attempt_file = self.write_face_attempt(
-            face_frame, id, datetime.datetime.now().timestamp(), sub_label, score
-        )
+        attempt_file = self.__recognize_face(id, camera, face_frame, start)
 
         if (
             attempt_file
@@ -275,20 +267,59 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
                 ),
             )
 
-        if id not in self.person_face_history:
-            self.person_face_history[id] = []
+    def __recognize_face(
+        self,
+        id: str,
+        camera: str,
+        face_frame: np.ndarray,
+        start: float,
+        remember: bool = True,
+    ) -> str | None:
+        """Recognize a face crop of a person and return the file it was saved to.
 
-            if camera not in self.camera_current_people:
-                self.camera_current_people[camera] = []
+        remember is off for a person whose history is gone and will not be
+        cleaned up again.
+        """
+        res = self.recognizer.classify(face_frame)
 
-            self.camera_current_people[camera].append(id)
+        if res:
+            sub_label, score = res
 
-        self.person_face_history[id].append(
-            (sub_label, score, face_frame.shape[0] * face_frame.shape[1])
+            if score <= self.face_config.unknown_score:
+                sub_label = "unknown"
+        elif self.face_detector.is_ready and not self.recognizer.mean_embs:
+            # an empty face library has nothing to compare the face against.
+            # the attempt is still saved so the library can be built from it
+            logger.debug(f"No faces in the library to compare {id} against")
+            sub_label, score = "unknown", 0.0
+        else:
+            logger.debug(f"Face recognizer returned no result for {id}")
+            self.__update_metrics(datetime.datetime.now().timestamp() - start)
+            return None
+
+        logger.debug(
+            f"Detected best face for person as: {sub_label} with probability {score}"
         )
-        (weighted_sub_label, weighted_score) = self.weighted_average(
-            self.person_face_history[id]
+
+        attempt_file = self.write_face_attempt(
+            face_frame, id, datetime.datetime.now().timestamp(), sub_label, score
         )
+        history = self.person_face_history.get(id)
+
+        if history is None:
+            history = []
+
+            if remember:
+                self.person_face_history[id] = history
+
+                if id not in self.expired_face_searches:
+                    if camera not in self.camera_current_people:
+                        self.camera_current_people[camera] = []
+
+                    self.camera_current_people[camera].append(id)
+
+        history.append((sub_label, score, face_frame.shape[0] * face_frame.shape[1]))
+        (weighted_sub_label, weighted_score) = self.weighted_average(history)
 
         self.requestor.send_data(
             "tracked_object_update",
@@ -311,6 +342,108 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
             )
 
         self.__update_metrics(datetime.datetime.now().timestamp() - start)
+        return attempt_file
+
+    def __search_main_stream(self, obj_data: dict[str, Any], frame: np.ndarray) -> None:
+        """Look in the main stream for a face too small for the detect stream."""
+        id = obj_data["id"]
+        camera = obj_data["camera"]
+        frame_time = obj_data.get("frame_time")
+        person_box = obj_data.get("box")
+
+        if (
+            not self.hires
+            or not self.hires.enabled(camera)
+            or not self.face_detector.is_ready
+            or not frame_time
+            or not person_box
+        ):
+            return
+
+        count, last_search = self.hires_face_searches.get(id, (0, 0.0))
+
+        if (
+            count >= MAX_HIRES_FACE_SEARCHES
+            or frame_time - last_search < HIRES_FACE_SEARCH_INTERVAL
+        ):
+            return
+
+        # the person is what places this moment in the main stream
+        reference = reference_from_yuv(
+            frame, person_box, self.config.cameras[camera].detect.height
+        )
+
+        if reference is None:
+            return
+
+        box = (person_box[0], person_box[1], person_box[2], person_box[3])
+
+        if self.hires.submit(
+            camera,
+            frame_time,
+            f"face_search:{id}",
+            lambda hires_frame, scale_x, scale_y: self.__recognize_main_stream_face(
+                id, camera, box, hires_frame, scale_x, scale_y
+            ),
+            reference,
+        ):
+            logger.debug(f"Searching the main stream for a face of {id}")
+            self.hires_face_searches[id] = (count + 1, frame_time)
+
+    def __recognize_main_stream_face(
+        self,
+        id: str,
+        camera: str,
+        person_box: tuple[int, int, int, int],
+        frame: np.ndarray,
+        scale_x: float,
+        scale_y: float,
+    ) -> None:
+        """Recognize the face of a person in a main stream frame."""
+        start = datetime.datetime.now().timestamp()
+        camera_config = self.config.cameras.get(camera)
+
+        if camera_config is None:
+            return
+
+        left, top, right, bottom = expand_box(
+            scale_box(person_box, scale_x, scale_y),
+            frame.shape,
+            HIRES_PERSON_SEARCH_PAD,
+        )
+        person = frame[top:bottom, left:right]
+
+        if person.size == 0:
+            return
+
+        detection = self.face_detector.detect(
+            person, self.face_config.detection_threshold
+        )
+
+        if detection is None:
+            logger.debug(f"No face of {id} in the main stream")
+            return
+
+        face_box = detection.face
+        face_frame = person[face_box[1] : face_box[3], face_box[0] : face_box[2]]
+
+        # the face is this large in the frame it is recognized from
+        if (
+            face_frame.size == 0
+            or area(face_box) < camera_config.face_recognition.min_area
+        ):
+            logger.debug(f"Face of {id} in the main stream is too small")
+            return
+
+        logger.debug(f"Found a face of {id} in the main stream")
+        # the frame of a person who left long ago has no history to add to
+        self.__recognize_face(
+            id,
+            camera,
+            face_frame,
+            start,
+            id in self.hires_face_searches or id in self.expired_face_searches,
+        )
 
     def handle_request(
         self, topic: str, request_data: dict[str, Any]
@@ -447,11 +580,22 @@ class FaceRealTimeProcessor(RealTimeProcessorApi):
         return None
 
     def expire_object(self, object_id: str, camera: str) -> None:
-        if object_id in self.person_face_history:
-            self.person_face_history.pop(object_id)
+        now = time.monotonic()
 
-            if object_id in self.camera_current_people.get(camera, []):
-                self.camera_current_people[camera].remove(object_id)
+        for expired_id, expired_at in list(self.expired_face_searches.items()):
+            if now - expired_at > REPLACE_WINDOW:
+                self.expired_face_searches.pop(expired_id)
+                self.person_face_history.pop(expired_id, None)
+
+        if self.hires_face_searches.pop(object_id, None):
+            # main stream frames of the person still arrive after they left, so
+            # the history is kept for them until those can no longer come
+            self.expired_face_searches[object_id] = now
+        else:
+            self.person_face_history.pop(object_id, None)
+
+        if object_id in self.camera_current_people.get(camera, []):
+            self.camera_current_people[camera].remove(object_id)
 
     def weighted_average(
         self, results_list: list[tuple[str, float, int]], max_weight: int = 4000

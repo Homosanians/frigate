@@ -944,6 +944,9 @@ image_source:
   #       recording segment is saved (about 10-15 seconds later). Cameras that are not
   #       recording use the current frame of their first go2rtc live stream instead.
   #       The detect stream image is kept whenever no matching frame is found.
+  #       With "main" or "auto" a person whose face is too small to be found in the
+  #       detect stream is also looked for in the main stream, up to 4 times per person.
+  #       Such a face is recognized once the main stream frame arrives.
   stream: detect
   # Optional: The streams are rarely in sync, so the main stream recording is searched
   #           around the detect frame time for the frame showing the same moment.
