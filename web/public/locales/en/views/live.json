@@ -66,7 +66,7 @@
       "setSuccess": "Home position saved"
     },
     "presetManagement": {
-      "manage": "Manage presets…",
+      "manage": "Manage presets",
       "title": "PTZ presets",
       "desc": "Presets are stored on the camera. Saving always stores the camera's current position.",
       "empty": "This camera has no presets yet.",

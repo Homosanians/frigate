@@ -302,7 +302,7 @@ test.describe("Live PTZ preset management @high", () => {
 
   async function openPresetManager(frigateApp: FrigateApp) {
     const menu = await openPresetMenu(frigateApp);
-    await menu.getByRole("menuitem", { name: "Manage presets…" }).click();
+    await menu.getByRole("menuitem", { name: "Manage presets" }).click();
     const manager = frigateApp.page.getByRole("dialog", {
       name: "PTZ presets",
     });
@@ -452,7 +452,7 @@ test.describe("Live PTZ preset management @high", () => {
     await expect(menu.getByRole("menuitem")).toHaveText([
       "Driveway",
       "Gate",
-      "Manage presets…",
+      "Manage presets",
     ]);
   });
 
@@ -585,7 +585,7 @@ test.describe("Live PTZ preset management @high", () => {
     const menu = await openPresetMenu(frigateApp);
     await expect(menu.getByRole("menuitem", { name: "Gate" })).toBeVisible();
     await expect(
-      menu.getByRole("menuitem", { name: "Manage presets…" }),
+      menu.getByRole("menuitem", { name: "Manage presets" }),
     ).toHaveCount(0);
   });
 });
