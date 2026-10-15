@@ -28,8 +28,8 @@ import { PtzPreset } from "@/types/ptz";
 import { ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { TooltipPortal } from "@radix-ui/react-tooltip";
-import { LuPlus, LuSave, LuTrash2 } from "react-icons/lu";
-import { MdHome, MdOutlineNearMe } from "react-icons/md";
+import { LuSave, LuTrash2 } from "react-icons/lu";
+import { MdOutlineNearMe } from "react-icons/md";
 import useSWR from "swr";
 
 // 1-64 characters once surrounding whitespace is trimmed, matching the API
@@ -77,7 +77,11 @@ export default function PtzPresetsDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[80dvh] overflow-y-auto">
+        <DialogContent
+          className="max-h-[80dvh] overflow-y-auto"
+          // focusing the first preset action on open would show its tooltip
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>{t("ptz.presetManagement.title")}</DialogTitle>
             <DialogDescription>
@@ -129,7 +133,7 @@ export default function PtzPresetsDialog({
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-end justify-between gap-2">
             <span className="text-xs text-muted-foreground">
               {maxPresets
                 ? t("ptz.presetManagement.count", {
@@ -141,7 +145,6 @@ export default function PtzPresetsDialog({
             <div className="flex flex-wrap items-center justify-end gap-2">
               {canSetHome && (
                 <Button disabled={isSaving} onClick={() => setHome()}>
-                  <MdHome className="mr-1" />
                   {t("ptz.home.set")}
                 </Button>
               )}
@@ -150,7 +153,6 @@ export default function PtzPresetsDialog({
                 disabled={isSaving}
                 onClick={() => setCreateOpen(true)}
               >
-                <LuPlus className="mr-1" />
                 {t("ptz.presetManagement.create.label")}
               </Button>
             </div>

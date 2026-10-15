@@ -313,9 +313,7 @@ test.describe("Live PTZ preset management @high", () => {
   // saving a new preset is reached through the preset manager
   async function openCreateDialog(frigateApp: FrigateApp) {
     const manager = await openPresetManager(frigateApp);
-    await manager
-      .getByRole("button", { name: "Save current position as preset…" })
-      .click();
+    await manager.getByRole("button", { name: "Add preset" }).click();
     const dialog = frigateApp.page.getByRole("dialog", {
       name: "Save current position as preset",
     });
@@ -458,6 +456,20 @@ test.describe("Live PTZ preset management @high", () => {
     ]);
   });
 
+  test("opening the manager does not show a preset action tooltip", async ({
+    frigateApp,
+  }) => {
+    test.skip(frigateApp.isMobile, "PTZ preset dropdown is desktop-only");
+    await installPtz(frigateApp);
+
+    await frigateApp.goto(`/#${PTZ_CAMERA}`);
+    const manager = await openPresetManager(frigateApp);
+    await expect(
+      manager.getByRole("button", { name: "Move to preset" }).first(),
+    ).not.toBeFocused();
+    await expect(frigateApp.page.getByRole("tooltip")).toHaveCount(0);
+  });
+
   test("manager overwrites with a new name and deletes by encoded token", async ({
     frigateApp,
   }) => {
@@ -556,7 +568,7 @@ test.describe("Live PTZ preset management @high", () => {
     await frigateApp.goto(`/#${PTZ_CAMERA}`);
     const manager = await openPresetManager(frigateApp);
     await expect(
-      manager.getByRole("button", { name: "Save current position as preset…" }),
+      manager.getByRole("button", { name: "Add preset" }),
     ).toBeVisible();
     await expect(
       manager.getByRole("button", { name: "Set current position as home" }),

@@ -74,7 +74,7 @@
       "count_other": "{{count}} of {{max}} presets",
       "goto": "Move to preset",
       "create": {
-        "label": "Save current position as preset…",
+        "label": "Add preset",
         "title": "Save current position as preset",
         "desc": "The camera stores its current position under this name.",
         "placeholder": "Preset name"

@@ -817,7 +817,7 @@ class OnvifController:
         try:
             nodes = await ptz.GetNodes()
         except Exception as e:
-            logger.debug(f"Unable to get PTZ nodes for {camera_name}: {e}")
+            logger.debug("Unable to get PTZ nodes for %s: %s", camera_name, e)
             nodes = []
 
         if nodes:

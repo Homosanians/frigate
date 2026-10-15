@@ -268,7 +268,7 @@ Generic mode needs the camera to offer the generic relative space. If it does no
 
 ### Managing presets and the home position
 
-Admin users can manage the camera's ONVIF presets directly from the PTZ controls in the Live view, without opening the camera's own web interface. The presets menu offers to save the camera's current position as a new preset, to set the current position as the home position, and to open a preset manager where presets can be overwritten or deleted. A home button appears when the camera reports home position support.
+Admin users can manage the camera's ONVIF presets directly from the PTZ controls in the Live view, without opening the camera's own web interface. The presets menu opens a preset manager where the camera's current position can be saved as a new preset or as the home position, and existing presets can be overwritten or deleted. A home button appears when the camera reports home position support.
 
 Presets are stored on the camera itself. ONVIF has no rename operation, so overwriting a preset (with or without a new name) always stores the camera's current position. If a preset is used as the autotracking `return_preset`, renaming or deleting it requires updating the config as well.
 
