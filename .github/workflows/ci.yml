@@ -19,7 +19,7 @@ env:
 
 jobs:
   amd64_build:
-    runs-on: self-hosted
+    runs-on: ubuntu-22.04
     name: AMD64 Build
     steps:
       - name: Check out code
@@ -43,7 +43,7 @@ jobs:
           cache-from: type=registry,ref=${{ steps.setup.outputs.cache-name }}-amd64
           cache-to: type=registry,ref=${{ steps.setup.outputs.cache-name }}-amd64,mode=max
   smoke_test:
-    runs-on: self-hosted
+    runs-on: ubuntu-22.04
     name: AMD64 Smoke Test
     needs:
       - amd64_build
@@ -57,10 +57,6 @@ jobs:
         uses: ./.github/actions/setup
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Clean up previous runs
-        run: |
-          docker ps -aq --filter name=^frigate | xargs -r docker rm -f
-          sudo rm -rf /tmp/frigate-*
       - name: Start container
         run: |
           mkdir -p /tmp/frigate-config /tmp/frigate-media
@@ -425,169 +421,11 @@ jobs:
       - name: Teardown
         if: always()
         run: docker rm -f frigate || true
-  arm64_build:
-    runs-on: self-hosted
-    name: ARM Build
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Set up QEMU and Buildx
-        id: setup
-        uses: ./.github/actions/setup
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push arm64 standard build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/main/Dockerfile
-          push: true
-          platforms: linux/arm64
-          target: frigate
-          tags: |
-            ${{ steps.setup.outputs.image-name }}-standard-arm64
-          cache-from: type=registry,ref=${{ steps.setup.outputs.cache-name }}-arm64
-      - name: Build and push RPi build
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          push: true
-          targets: rpi
-          files: docker/rpi/rpi.hcl
-          set: |
-            rpi.tags=${{ steps.setup.outputs.image-name }}-rpi
-            *.cache-from=type=registry,ref=${{ steps.setup.outputs.cache-name }}-arm64
-            *.cache-to=type=registry,ref=${{ steps.setup.outputs.cache-name }}-arm64,mode=max
-  jetson_jp6_build:
-    runs-on: self-hosted
-    name: Jetson Jetpack 6
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Set up QEMU and Buildx
-        id: setup
-        uses: ./.github/actions/setup
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push TensorRT (Jetson, Jetpack 6)
-        env:
-          ARCH: arm64
-          BASE_IMAGE: nvcr.io/nvidia/tensorrt:23.12-py3-igpu
-          SLIM_BASE: nvcr.io/nvidia/tensorrt:23.12-py3-igpu
-          TRT_BASE: nvcr.io/nvidia/tensorrt:23.12-py3-igpu
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          push: true
-          targets: tensorrt
-          files: docker/tensorrt/trt.hcl
-          set: |
-            tensorrt.tags=${{ steps.setup.outputs.image-name }}-tensorrt-jp6
-            *.cache-from=type=registry,ref=${{ steps.setup.outputs.cache-name }}-jp6
-            *.cache-to=type=registry,ref=${{ steps.setup.outputs.cache-name }}-jp6,mode=max
-  amd64_extra_builds:
-    runs-on: self-hosted
-    name: AMD64 Extra Build
-    needs:
-      - amd64_build
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Set up QEMU and Buildx
-        id: setup
-        uses: ./.github/actions/setup
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push TensorRT (x86 GPU)
-        env:
-          COMPUTE_LEVEL: "50 60 70 80 90"
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          push: true
-          targets: tensorrt
-          files: docker/tensorrt/trt.hcl
-          set: |
-            tensorrt.tags=${{ steps.setup.outputs.image-name }}-tensorrt
-            *.cache-from=type=registry,ref=${{ steps.setup.outputs.cache-name }}-tensorrt
-            *.cache-to=type=registry,ref=${{ steps.setup.outputs.cache-name }}-tensorrt,mode=max
-      - name: AMD/ROCm general build
-        env:
-          HSA_OVERRIDE: 0
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          push: true
-          targets: rocm
-          files: docker/rocm/rocm.hcl
-          set: |
-            rocm.tags=${{ steps.setup.outputs.image-name }}-rocm
-            *.cache-to=type=registry,ref=${{ steps.setup.outputs.cache-name }}-rocm,mode=max
-            *.cache-from=type=registry,ref=${{ steps.setup.outputs.cache-name }}-rocm
-  arm64_extra_builds:
-    runs-on: self-hosted
-    name: ARM Extra Build
-    needs:
-      - arm64_build
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Set up QEMU and Buildx
-        id: setup
-        uses: ./.github/actions/setup
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push Rockchip build
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          push: true
-          targets: rk
-          files: docker/rockchip/rk.hcl
-          set: |
-            rk.tags=${{ steps.setup.outputs.image-name }}-rk
-            *.cache-from=type=gha
-  synaptics_build:
-    runs-on: self-hosted
-    name: Synaptics Build
-    needs:
-      - arm64_build
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Set up QEMU and Buildx
-        id: setup
-        uses: ./.github/actions/setup
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push Synaptics build
-        uses: docker/bake-action@v7
-        with:
-          source: .
-          push: true
-          targets: synaptics
-          files: docker/synaptics/synaptics.hcl
-          set: |
-            synaptics.tags=${{ steps.setup.outputs.image-name }}-synaptics
-            *.cache-from=type=gha
-  # The majority of users running arm64 are rpi users, so the rpi
-  # build should be the primary arm64 image
   assemble_default_build:
-    runs-on: self-hosted
+    runs-on: ubuntu-22.04
     name: Assemble and push default build
     needs:
       - amd64_build
-      - arm64_build
     steps:
       - id: lowercaseRepo
         uses: ASzc/change-string-case-action@v6
@@ -606,21 +444,16 @@ jobs:
           tags: ghcr.io/${{ steps.lowercaseRepo.outputs.lowercase }}:${{ env.SHORT_SHA }}
           sources: |
             ghcr.io/${{ steps.lowercaseRepo.outputs.lowercase }}:${{ env.SHORT_SHA }}-amd64
-            ghcr.io/${{ steps.lowercaseRepo.outputs.lowercase }}:${{ env.SHORT_SHA }}-rpi
   # every image of the newest dev build is also published under the dev and
   # latest aliases
   tag_latest:
-    runs-on: self-hosted
+    runs-on: ubuntu-22.04
     name: Tag dev and latest
     # a variant that failed to build keeps its previous latest image
     if: ${{ !cancelled() && github.ref == 'refs/heads/dev' && needs.smoke_test.result == 'success' && needs.assemble_default_build.result == 'success' }}
     needs:
       - smoke_test
       - assemble_default_build
-      - jetson_jp6_build
-      - amd64_extra_builds
-      - arm64_extra_builds
-      - synaptics_build
     steps:
       - id: lowercaseRepo
         uses: ASzc/change-string-case-action@v6
@@ -645,7 +478,4 @@ jobs:
             ALIAS_TAG=${BASE}:${alias}
             copy ${BUILD_TAG} ${ALIAS_TAG}
             copy ${BUILD_TAG}-amd64 ${ALIAS_TAG}-amd64
-            for variant in standard-arm64 rpi tensorrt tensorrt-jp6 rocm rk synaptics; do
-              copy ${BUILD_TAG}-${variant} ${ALIAS_TAG}-${variant} || echo "::warning::No ${variant} image in this build, its ${alias} tag was left as it is"
-            done
           done
