@@ -19,7 +19,7 @@ env:
 
 jobs:
   amd64_build:
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
     name: AMD64 Build
     steps:
       - name: Check out code
@@ -43,7 +43,7 @@ jobs:
           cache-from: type=registry,ref=${{ steps.setup.outputs.cache-name }}-amd64
           cache-to: type=registry,ref=${{ steps.setup.outputs.cache-name }}-amd64,mode=max
   smoke_test:
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
     name: AMD64 Smoke Test
     needs:
       - amd64_build
@@ -57,6 +57,10 @@ jobs:
         uses: ./.github/actions/setup
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Clean up previous runs
+        run: |
+          docker ps -aq --filter name=^frigate | xargs -r docker rm -f
+          sudo rm -rf /tmp/frigate-*
       - name: Start container
         run: |
           mkdir -p /tmp/frigate-config /tmp/frigate-media
@@ -422,7 +426,7 @@ jobs:
         if: always()
         run: docker rm -f frigate || true
   arm64_build:
-    runs-on: ubuntu-22.04-arm
+    runs-on: self-hosted
     name: ARM Build
     steps:
       - name: Check out code
@@ -457,7 +461,7 @@ jobs:
             *.cache-from=type=registry,ref=${{ steps.setup.outputs.cache-name }}-arm64
             *.cache-to=type=registry,ref=${{ steps.setup.outputs.cache-name }}-arm64,mode=max
   jetson_jp6_build:
-    runs-on: ubuntu-22.04-arm
+    runs-on: self-hosted
     name: Jetson Jetpack 6
     steps:
       - name: Check out code
@@ -486,7 +490,7 @@ jobs:
             *.cache-from=type=registry,ref=${{ steps.setup.outputs.cache-name }}-jp6
             *.cache-to=type=registry,ref=${{ steps.setup.outputs.cache-name }}-jp6,mode=max
   amd64_extra_builds:
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
     name: AMD64 Extra Build
     needs:
       - amd64_build
@@ -527,7 +531,7 @@ jobs:
             *.cache-to=type=registry,ref=${{ steps.setup.outputs.cache-name }}-rocm,mode=max
             *.cache-from=type=registry,ref=${{ steps.setup.outputs.cache-name }}-rocm
   arm64_extra_builds:
-    runs-on: ubuntu-22.04-arm
+    runs-on: self-hosted
     name: ARM Extra Build
     needs:
       - arm64_build
@@ -552,7 +556,7 @@ jobs:
             rk.tags=${{ steps.setup.outputs.image-name }}-rk
             *.cache-from=type=gha
   synaptics_build:
-    runs-on: ubuntu-22.04-arm
+    runs-on: self-hosted
     name: Synaptics Build
     needs:
       - arm64_build
@@ -579,7 +583,7 @@ jobs:
   # The majority of users running arm64 are rpi users, so the rpi
   # build should be the primary arm64 image
   assemble_default_build:
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
     name: Assemble and push default build
     needs:
       - amd64_build
@@ -606,7 +610,7 @@ jobs:
   # every image of the newest dev build is also published under the dev and
   # latest aliases
   tag_latest:
-    runs-on: ubuntu-22.04
+    runs-on: self-hosted
     name: Tag dev and latest
     # a variant that failed to build keeps its previous latest image
     if: ${{ !cancelled() && github.ref == 'refs/heads/dev' && needs.smoke_test.result == 'success' && needs.assemble_default_build.result == 'success' }}

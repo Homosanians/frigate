@@ -13,6 +13,8 @@ runs:
   steps:
     # Stop docker so we can mount more space at /var/lib/docker
     - name: Stop docker
+      # self-hosted runners are persistent hosts, leave their docker alone
+      if: runner.environment == 'github-hosted'
       run: sudo systemctl stop docker
       shell: bash
     # This creates a virtual volume at /var/lib/docker to maximize the size
@@ -21,6 +23,7 @@ runs:
     # from root and temp-reserve-mb is what actually stays free on root. Keep 4G
     # there for setup-qemu/buildx caches in ~/.docker and the tool cache
     - name: Maximize build space
+      if: runner.environment == 'github-hosted'
       uses: easimon/maximize-build-space@master
       with:
         root-reserve-mb: 8192
@@ -31,6 +34,7 @@ runs:
         remove-codeql: 'true'
         build-mount-path: '/var/lib/docker'
     - name: Start docker
+      if: runner.environment == 'github-hosted'
       run: sudo systemctl start docker
       shell: bash
     - id: lowercaseRepo
