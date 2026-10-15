@@ -25,10 +25,12 @@ from frigate.config import FrigateConfig, RelativeMoveConfig, RelativeMoveModeEn
 from frigate.ptz.autotrack import ptz_moving_at_frame_time
 from frigate.ptz.event_log import PtzEventLog, PtzSource
 from frigate.ptz.onvif import (
+    DuplicatePresetError,
     OnvifCommandEnum,
     OnvifController,
     OnvifRequestError,
     OnvifUnavailableError,
+    PresetNotFoundError,
     describe_relative_spaces,
     describe_status,
     relative_space_index,
@@ -360,10 +362,13 @@ async def _make_preset_controller(
     controller.cams[CAMERA].update(
         {"presets": {}, "preset_details": [], "max_presets": None}
     )
+    controller.preset_locks = {CAMERA: asyncio.Lock()}
     ptz = controller.cams[CAMERA]["onvif"].create_ptz_service.return_value
     stored = list(presets)
 
     async def set_preset(request: dict) -> str:
+        # yield like a network call so overlapping requests can interleave
+        await asyncio.sleep(0)
         token = request.get("PresetToken")
         if token is None:
             token = f"new_{len(stored)}"
@@ -437,17 +442,18 @@ class TestPresetManagement(unittest.IsolatedAsyncioTestCase):
         )
         ptz = controller.cams[CAMERA]["ptz"]
 
-        for name, token in (
-            ("driveway", None),  # duplicate, recalled by lowercase name
-            ("Gate", "1"),  # renaming onto another preset
-            ("   ", None),
-            ("Porch", "missing"),
+        for name, token, error in (
+            # duplicate, recalled by lowercase name
+            ("driveway", None, DuplicatePresetError),
+            ("Gate", "1", DuplicatePresetError),  # renaming onto another preset
+            ("   ", None, OnvifRequestError),
+            ("Porch", "missing", PresetNotFoundError),
         ):
             with self.subTest(name=name, token=token):
-                with self.assertRaises(OnvifRequestError):
+                with self.assertRaises(error):
                     await controller.set_preset(CAMERA, name, token)
 
-        with self.assertRaises(OnvifRequestError):
+        with self.assertRaises(PresetNotFoundError):
             await controller.remove_preset(CAMERA, "missing")
 
         ptz.SetPreset.assert_not_awaited()
@@ -502,6 +508,45 @@ class TestPresetManagement(unittest.IsolatedAsyncioTestCase):
         ptz.SetHomePosition.assert_awaited_once_with({"ProfileToken": "profile_1"})
         ptz.GotoHomePosition.assert_awaited_once_with({"ProfileToken": "profile_1"})
         self.assertFalse(controller.cams[CAMERA]["active"])
+
+    async def test_failed_home_command_clears_active(self) -> None:
+        controller = await _make_preset_controller([])
+        controller.ptz_metrics = {CAMERA: PTZMetrics()}
+        controller.cams[CAMERA]["ptz"].GotoHomePosition.side_effect = Exception(
+            "home not supported"
+        )
+
+        await controller.handle_command_async(CAMERA, OnvifCommandEnum.home)
+
+        self.assertFalse(controller.cams[CAMERA]["active"])
+
+    async def test_write_succeeds_when_refresh_fails(self) -> None:
+        controller = await _make_preset_controller(
+            [_Preset("1", "Driveway"), _Preset("2", "Gate")]
+        )
+        ptz = controller.cams[CAMERA]["ptz"]
+        ptz.GetPresets.side_effect = Exception("timeout")
+
+        token = await controller.set_preset(CAMERA, "Porch")
+        await controller.set_preset(CAMERA, "Garage", "1")
+        await controller.remove_preset(CAMERA, "2")
+
+        self.assertEqual(token, "new_2")
+        self.assertEqual(
+            controller.cams[CAMERA]["presets"], {"porch": "new_2", "garage": "1"}
+        )
+
+    async def test_overlapping_creates_reject_duplicate(self) -> None:
+        controller = await _make_preset_controller([])
+
+        results = await asyncio.gather(
+            controller.set_preset(CAMERA, "Porch"),
+            controller.set_preset(CAMERA, "porch"),
+            return_exceptions=True,
+        )
+
+        self.assertEqual(sum(isinstance(r, DuplicatePresetError) for r in results), 1)
+        self.assertEqual(controller.cams[CAMERA]["presets"], {"porch": "new_0"})
 
 
 def _make_no_ptz_controller(no_ptz_service: bool) -> OnvifController:

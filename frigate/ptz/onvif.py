@@ -68,6 +68,20 @@ class OnvifUnavailableError(Exception):
 class OnvifRequestError(ValueError):
     """A PTZ management request was rejected before reaching the camera."""
 
+    reason = "invalid_request"
+
+
+class PresetNotFoundError(OnvifRequestError):
+    """The preset token does not match any preset on the camera."""
+
+    reason = "preset_not_found"
+
+
+class DuplicatePresetError(OnvifRequestError):
+    """Another preset already uses the requested name."""
+
+    reason = "duplicate_name"
+
 
 PAN_TILT_VELOCITY = {
     OnvifCommandEnum.move_left: (-0.5, 0),
@@ -367,6 +381,8 @@ class OnvifController:
         self.time_sync_tasks: dict[str, asyncio.Task] = {}
         # kept apart from self.cams so a result outlives a session reconnect
         self.time_sync_results: dict[str, dict[str, Any]] = {}
+        # serializes each camera's preset name checks, writes and cache refreshes
+        self.preset_locks: dict[str, asyncio.Lock] = {}
 
         # Create a dedicated event loop and run it in a separate thread
         self.loop = asyncio.new_event_loop()
@@ -450,6 +466,7 @@ class OnvifController:
 
         if self.event_log is not None:
             self.event_log.remove_camera(cam_name)
+        self.preset_locks.pop(cam_name, None)
 
     async def _reinit_camera(self, cam_name: str) -> None:
         """Re-initialize a camera after config change."""
@@ -487,6 +504,7 @@ class OnvifController:
             return False
 
         self.status_locks.setdefault(cam_name, asyncio.Lock())
+        self.preset_locks.setdefault(cam_name, asyncio.Lock())
         try:
             self.cams[cam_name] = {
                 "onvif": ONVIFCamera(
@@ -1292,7 +1310,6 @@ class OnvifController:
             {"ProfileToken": cam["move_request"].ProfileToken}
         )
 
-        preset_tokens: dict[str, str] = {}
         preset_details: list[dict[str, str]] = []
 
         for preset in presets or []:
@@ -1305,10 +1322,15 @@ class OnvifController:
                 preset_name = preset_name.encode("latin-1").decode("utf-8")
             except (UnicodeEncodeError, UnicodeDecodeError):
                 pass
-            preset_tokens[preset_name.lower()] = token
             preset_details.append({"token": token, "name": preset_name})
 
-        cam["presets"] = preset_tokens
+        self._cache_presets(camera_name, preset_details)
+
+    def _cache_presets(
+        self, camera_name: str, preset_details: list[dict[str, str]]
+    ) -> None:
+        cam = self.cams[camera_name]
+        cam["presets"] = {p["name"].lower(): p["token"] for p in preset_details}
         cam["preset_details"] = preset_details
 
     async def _get_initialized_cam(self, camera_name: str) -> dict:
@@ -1342,64 +1364,98 @@ class OnvifController:
             The token of the saved preset
         """
         cam = await self._get_initialized_cam(camera_name)
-        details = {p["token"]: p["name"] for p in cam["preset_details"]}
 
-        if token is not None and token not in details:
-            raise OnvifRequestError(f"Preset {token} not found for {camera_name}")
+        async with self.preset_locks[camera_name]:
+            details = {p["token"]: p["name"] for p in cam["preset_details"]}
 
-        if name is None and token is not None:
-            name = details[token]
+            if token is not None and token not in details:
+                raise PresetNotFoundError(f"Preset {token} not found for {camera_name}")
 
-        name = (name or "").strip()
+            if name is None and token is not None:
+                name = details[token]
 
-        if not name:
-            raise OnvifRequestError("Preset name must not be empty")
+            name = (name or "").strip()
 
-        # presets are recalled by lowercase name, so a duplicate would be ambiguous
-        existing = cam["presets"].get(name.lower())
-        if existing is not None and existing != token:
-            raise OnvifRequestError(f"A preset named {name} already exists")
+            if not name:
+                raise OnvifRequestError("Preset name must not be empty")
 
-        request = {
-            "ProfileToken": cam["move_request"].ProfileToken,
-            "PresetName": name,
-        }
+            # presets are recalled by lowercase name, so a duplicate would be
+            # ambiguous
+            existing = cam["presets"].get(name.lower())
+            if existing is not None and existing != token:
+                raise DuplicatePresetError(f"A preset named {name} already exists")
 
-        if token is not None:
-            request["PresetToken"] = token
+            request = {
+                "ProfileToken": cam["move_request"].ProfileToken,
+                "PresetName": name,
+            }
 
-        result = await self._ptz_request(
-            camera_name,
-            PtzSource.api,
-            cam["ptz"],
-            "SetPreset",
-            request,
-            {"preset": name},
-        )
-        await self._load_presets(camera_name)
-        return result or token or ""
+            if token is not None:
+                request["PresetToken"] = token
+
+            saved_token = (
+                await self._ptz_request(
+                    camera_name,
+                    PtzSource.api,
+                    cam["ptz"],
+                    "SetPreset",
+                    request,
+                    {"preset": name},
+                )
+                or token
+                or ""
+            )
+
+            if not await self._refresh_presets(camera_name):
+                presets = [p for p in cam["preset_details"] if p["token"] != token]
+                presets.append({"token": saved_token, "name": name})
+                self._cache_presets(camera_name, presets)
+
+            return saved_token
 
     async def remove_preset(self, camera_name: str, token: str) -> None:
         """Delete a preset from the camera."""
         cam = await self._get_initialized_cam(camera_name)
 
-        if not any(p["token"] == token for p in cam["preset_details"]):
-            raise OnvifRequestError(f"Preset {token} not found for {camera_name}")
+        async with self.preset_locks[camera_name]:
+            if not any(p["token"] == token for p in cam["preset_details"]):
+                raise PresetNotFoundError(f"Preset {token} not found for {camera_name}")
 
-        name = next(p["name"] for p in cam["preset_details"] if p["token"] == token)
+            name = next(p["name"] for p in cam["preset_details"] if p["token"] == token)
 
-        await self._ptz_request(
-            camera_name,
-            PtzSource.api,
-            cam["ptz"],
-            "RemovePreset",
-            {
-                "ProfileToken": cam["move_request"].ProfileToken,
-                "PresetToken": token,
-            },
-            {"preset": name},
-        )
-        await self._load_presets(camera_name)
+            await self._ptz_request(
+                camera_name,
+                PtzSource.api,
+                cam["ptz"],
+                "RemovePreset",
+                {
+                    "ProfileToken": cam["move_request"].ProfileToken,
+                    "PresetToken": token,
+                },
+                {"preset": name},
+            )
+
+            if not await self._refresh_presets(camera_name):
+                self._cache_presets(
+                    camera_name,
+                    [p for p in cam["preset_details"] if p["token"] != token],
+                )
+
+    async def _refresh_presets(self, camera_name: str) -> bool:
+        """Reload presets after a successful write.
+
+        The write already succeeded, so a failed read must not turn it into an
+        error. The caller then applies the change to the cache itself.
+        """
+        try:
+            await self._load_presets(camera_name)
+        except Exception as e:
+            logger.warning(
+                "Unable to reload presets for %s after a change: %s", camera_name, e
+            )
+            return False
+
+        return True
 
     async def set_home(self, camera_name: str) -> None:
         """Save the current camera position as the home position."""

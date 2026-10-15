@@ -6,7 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from frigate.models import Event, Recordings
-from frigate.ptz.onvif import OnvifRequestError, OnvifUnavailableError
+from frigate.ptz.onvif import (
+    DuplicatePresetError,
+    OnvifRequestError,
+    OnvifUnavailableError,
+    PresetNotFoundError,
+)
 from frigate.test.http_api.base_http_test import AuthTestClient, BaseTestHttp
 
 CAMERA = "front_door"
@@ -96,10 +101,24 @@ class TestHttpPtz(BaseTestHttp):
         self.onvif.set_home.assert_awaited_once_with(CAMERA)
 
     def test_errors_mapped_to_status_codes(self):
-        for error, status in (
-            (OnvifRequestError("A preset named Porch already exists"), 400),
-            (OnvifUnavailableError("ONVIF is not configured"), 404),
-            (CameraFault("Preset table full"), 502),
+        for error, status, reason in (
+            (
+                DuplicatePresetError("A preset named Porch already exists"),
+                409,
+                "duplicate_name",
+            ),
+            (PresetNotFoundError("Preset 7 not found"), 404, "preset_not_found"),
+            (
+                OnvifRequestError("Preset name must not be empty"),
+                400,
+                "invalid_request",
+            ),
+            (
+                OnvifUnavailableError("ONVIF is not configured"),
+                404,
+                "onvif_unavailable",
+            ),
+            (CameraFault("Preset table full"), 502, "camera_rejected"),
         ):
             with self.subTest(error=error):
                 self.onvif.set_preset.side_effect = error
@@ -110,7 +129,7 @@ class TestHttpPtz(BaseTestHttp):
                     )
 
                 assert response.status_code == status
-                assert str(error) in response.json()["message"]
+                assert response.json()["reason"] == reason
 
     def test_unknown_camera(self):
         with AuthTestClient(self.app) as client:

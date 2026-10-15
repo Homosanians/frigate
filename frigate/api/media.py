@@ -257,20 +257,33 @@ async def _onvif_request(
 
     try:
         result = await asyncio.wrap_future(future)
+    # reason lets the web UI show a translated message for preset errors
     except OnvifUnavailableError as e:
         return JSONResponse(
-            content={"success": False, "message": str(e)}, status_code=404
+            content={
+                "success": False,
+                "message": str(e),
+                "reason": "onvif_unavailable",
+            },
+            status_code=404,
         )
     except OnvifRequestError as e:
         return JSONResponse(
-            content={"success": False, "message": str(e)}, status_code=400
+            content={"success": False, "message": str(e), "reason": e.reason},
+            status_code={"duplicate_name": 409, "preset_not_found": 404}.get(
+                e.reason, 400
+            ),
         )
     except Exception as e:
         # zeep faults carry the camera's own explanation in .message
         error = getattr(e, "message", None) or str(e)
         logger.error("ONVIF request failed for %s: %s", camera_name, error)
         return JSONResponse(
-            content={"success": False, "message": f"Camera rejected request: {error}"},
+            content={
+                "success": False,
+                "message": f"Camera rejected request: {error}",
+                "reason": "camera_rejected",
+            },
             status_code=502,
         )
 
@@ -296,6 +309,7 @@ async def _onvif_request(
 async def camera_ptz_preset_create(
     request: Request, camera_name: str, body: PtzPresetCreateBody
 ):
+    """Save the current camera position as a new ONVIF preset."""
     return await _onvif_request(
         request,
         camera_name,
@@ -316,6 +330,7 @@ async def camera_ptz_preset_create(
 async def camera_ptz_preset_update(
     request: Request, camera_name: str, token: str, body: PtzPresetUpdateBody
 ):
+    """Overwrite a preset with the current position, optionally renaming it."""
     return await _onvif_request(
         request,
         camera_name,
@@ -335,6 +350,7 @@ async def camera_ptz_preset_update(
     description="Delete an ONVIF preset from the camera.",
 )
 async def camera_ptz_preset_delete(request: Request, camera_name: str, token: str):
+    """Delete an ONVIF preset from the camera."""
     return await _onvif_request(
         request,
         camera_name,
@@ -353,6 +369,7 @@ async def camera_ptz_preset_delete(request: Request, camera_name: str, token: st
     description="Save the current camera position as the ONVIF home position.",
 )
 async def camera_ptz_home_set(request: Request, camera_name: str):
+    """Save the current camera position as the ONVIF home position."""
     return await _onvif_request(
         request,
         camera_name,

@@ -384,6 +384,36 @@ test.describe("Live PTZ preset management @high", () => {
     await expect(dialog).toBeVisible();
   });
 
+  test("a rejected request shows the translated reason, not server text", async ({
+    frigateApp,
+  }) => {
+    test.skip(frigateApp.isMobile, "PTZ preset dropdown is desktop-only");
+    await installPtz(frigateApp);
+    await frigateApp.page.route(`**/api/${PTZ_CAMERA}/ptz/presets`, (route) =>
+      route.fulfill({
+        status: 409,
+        json: {
+          success: false,
+          message: "server text",
+          reason: "duplicate_name",
+        },
+      }),
+    );
+
+    await frigateApp.goto(`/#${PTZ_CAMERA}`);
+    const dialog = await openCreateDialog(frigateApp);
+    // 63 letters and an emoji are 64 characters, the most the API accepts
+    await dialog.getByRole("textbox").fill(`${"a".repeat(63)}🙂`);
+    await dialog.getByRole("button", { name: "Save" }).click();
+
+    await expect(
+      frigateApp.page
+        .getByText("A preset with this name already exists")
+        .first(),
+    ).toBeVisible();
+    await expect(frigateApp.page.getByText("server text")).toHaveCount(0);
+  });
+
   test("names outside 1-64 characters are rejected before any request", async ({
     frigateApp,
   }) => {

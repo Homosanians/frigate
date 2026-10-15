@@ -21,15 +21,15 @@ export function usePtzPresetActions(camera: string) {
         await mutate(`${camera}/ptz/info`);
         return true;
       } catch (error) {
-        // FastAPI validation errors carry a list of objects in detail, which
-        // cannot be rendered, so only plain string messages are shown as-is
-        const data = axios.isAxiosError(error)
-          ? error.response?.data
+        const reason = axios.isAxiosError(error)
+          ? error.response?.data?.reason
           : undefined;
-        const message = [data?.message, data?.detail].find(
-          (value): value is string => typeof value === "string" && !!value,
-        );
-        toast.error(message ?? t("ptz.presetManagement.error"), {
+        const errors: Record<string, string> = {
+          onvif_unavailable: t("ptz.presetManagement.errors.onvifUnavailable"),
+          preset_not_found: t("ptz.presetManagement.errors.presetNotFound"),
+          duplicate_name: t("ptz.presetManagement.errors.duplicateName"),
+        };
+        toast.error(errors[reason] ?? t("ptz.presetManagement.error"), {
           position: "top-center",
         });
         return false;

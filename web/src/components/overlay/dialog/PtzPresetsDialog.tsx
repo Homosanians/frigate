@@ -32,8 +32,9 @@ import { LuSave, LuTrash2 } from "react-icons/lu";
 import { MdOutlineNearMe } from "react-icons/md";
 import useSWR from "swr";
 
-// 1-64 characters once surrounding whitespace is trimmed, matching the API
-const PRESET_NAME_PATTERN = /^\s*\S(?:.{0,62}\S)?\s*$/;
+// 1-64 characters once surrounding whitespace is trimmed, matching the API;
+// the u flag counts characters like emoji once, as Python does
+const PRESET_NAME_PATTERN = /^\s*\S(?:.{0,62}\S)?\s*$/u;
 
 type PtzPresetsDialogProps = {
   camera: string;

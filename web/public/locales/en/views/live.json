@@ -98,6 +98,11 @@
         "delete": "Preset deleted"
       },
       "error": "The camera rejected the request",
+      "errors": {
+        "onvifUnavailable": "ONVIF is not available for this camera",
+        "presetNotFound": "This preset no longer exists on the camera",
+        "duplicateName": "A preset with this name already exists"
+      },
       "invalidName": "Preset names must be 1 to 64 characters"
     }
   },
